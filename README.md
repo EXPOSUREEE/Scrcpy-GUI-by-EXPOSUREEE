@@ -1,5 +1,3 @@
-Thank you for the additional information. I have updated the `README.md` file for the "Scrcpy GUI by EXPOSUREEE" application to include the camera mirroring feature. Here is the updated version:
-
 # Scrcpy GUI by EXPOSUREEE
 
 Scrcpy GUI by EXPOSUREEE is a graphical user interface for Scrcpy that makes it easier to use. The GUI has a simple and intuitive interface, and it allows you to control all of the same features as the command-line version.
