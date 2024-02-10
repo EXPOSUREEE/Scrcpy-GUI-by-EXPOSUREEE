@@ -2,6 +2,8 @@
 
 Scrcpy GUI by EXPOSUREEE is a graphical user interface for Scrcpy that makes it easier to use. The GUI has a simple and intuitive interface, and it allows you to control all of the same features as the command-line version.
 
+![Screenshot 2024-02-10 165828](https://github.com/EXPOSUREEE/Scrcpy-GUI-by-EXPOSUREEE/assets/113922464/4224d316-352d-4986-997d-b73038a5710e)
+
 ## Introduction
 
 Scrcpy is a free and open-source screen mirroring application that allows control of an Android device from a Windows desktop computer. It does not require rooting or the installation or running of an app on the Android device. The screen content is streamed as H.264 video, which the software then decodes and displays on the computer. The software pushes keyboard and mouse input to the Android device over the server.
@@ -36,3 +38,4 @@ To capture the camera instead of the device screen, use the following options:
 ## Conclusion
 
 This Scrcpy GUI is a great way to make Scrcpy easier to use. If you are looking for a way to mirror your Android screen or camera to your computer, I highly recommend using the Scrcpy GUI.
+
