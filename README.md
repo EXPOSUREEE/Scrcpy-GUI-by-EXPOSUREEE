@@ -2,7 +2,8 @@
 
 Scrcpy GUI by EXPOSUREEE is a graphical user interface for Scrcpy that makes it easier to use. The GUI has a simple and intuitive interface, and it allows you to control all of the same features as the command-line version.
 
-![Scrcpy GUI By EXPOSUREEE 3 0 (Image 1)](https://github.com/user-attachments/assets/cdcde60e-05c0-46e9-bf70-129e95c10fcd)
+<img width="882" height="712" alt="Screenshot 2025-12-15 141346" src="https://github.com/user-attachments/assets/4bda0404-3e70-413a-808c-956ea6361348" />
+
 
 ## Introduction
 
@@ -19,7 +20,7 @@ I have created a GUI for Scrcpy that makes it easier to use. The GUI has a simpl
 
 ## Features
 
-![Scrcpy GUI v3 0 Website Images](https://github.com/user-attachments/assets/8efb6e43-e6a2-4c0e-a0e7-155c59af1de6)
+
 
 The Scrcpy GUI has the following features:
 
