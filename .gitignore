@@ -1,0 +1,25 @@
+# Scrcpy & ADB Binaries / Dependencies
+*.dll
+*.exe
+scrcpy-server
+scrcpy-noconsole.vbs
+scrcpy-console.bat
+open_a_terminal_here.bat
+
+# PyInstaller Build Folders
+build/
+dist/
+*.spec
+
+# Python Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Settings
+config.json
+
+# IDEs
+.vscode/
+.idea/
