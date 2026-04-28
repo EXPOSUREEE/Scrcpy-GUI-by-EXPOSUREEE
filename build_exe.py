@@ -10,7 +10,6 @@ cmd = [
     "--noconfirm",
     "--onefile",
     "--windowed",
-    "--icon=logos.ico",
     "--name", "Scrcpy_GUI_Pro",
     "--collect-all", "customtkinter",
     "main.py"
