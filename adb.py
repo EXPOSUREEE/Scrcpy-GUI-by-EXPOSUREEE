@@ -45,14 +45,89 @@ class AdbManager:
             self.console.log_hint_for_message(combined)
 
     def refresh_devices(self, on_success, on_error):
+        from device_names import DeviceInfo, load_device_name_map, build_display_name
+        
         def task():
-            result = self.run_cmd_sync(["devices"], context="ADB device scan")
+            mapping = load_device_name_map(self.script_dir)
+            result = self.run_cmd_sync(["devices", "-l"], context="ADB device scan")
             output = result.stdout.strip() if result else ""
             if result and result.returncode == 0 and output:
                 lines = output.split('\n')[1:]
-                devices = [line.split()[0] for line in lines if "device" in line]
-                if devices:
-                    on_success(devices)
+                device_infos = []
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                
+                for line in lines:
+                    line = line.strip()
+                    if not line: continue
+                    parts = line.split()
+                    if len(parts) < 2: continue
+                    
+                    serial = parts[0]
+                    state = parts[1]
+                    
+                    if state != "device":
+                        self.console.log("WARN", f"Device unauthorized or offline: {serial}. Please allow USB debugging on the phone.")
+                        continue
+                        
+                    transport = "usb"
+                    if ":" in serial:
+                        transport = "wireless"
+                    elif serial.startswith("emulator-"):
+                        transport = "emulator"
+                        
+                    info = DeviceInfo(serial=serial, state=state, transport=transport)
+                    
+                    for part in parts[2:]:
+                        if part.startswith("product:"):
+                            info.product = part.split(":", 1)[1]
+                        elif part.startswith("model:"):
+                            info.model = part.split(":", 1)[1]
+                        elif part.startswith("device:"):
+                            info.device = part.split(":", 1)[1]
+                            
+                    props_to_fetch = {
+                        "ro.product.manufacturer": "manufacturer",
+                        "ro.product.brand": "brand",
+                        "ro.product.model": "model",
+                        "ro.product.name": "product",
+                        "ro.product.device": "device",
+                        "ro.product.marketname": "market_name",
+                        "ro.vendor.product.model": "model_vendor",
+                        "ro.product.vendor.model": "model_vendor2",
+                        "ro.config.marketing_name": "market_name2",
+                        "ro.vendor.oplus.market.name": "market_name3",
+                        "ro.miui.device.name": "market_name4"
+                    }
+                    
+                    for prop, attr in props_to_fetch.items():
+                        cmd = [self.adb_exe, "-s", serial, "shell", "getprop", prop]
+                        try:
+                            res = subprocess.run(
+                                cmd,
+                                capture_output=True,
+                                text=True,
+                                cwd=self.script_dir,
+                                timeout=1.5,
+                                startupinfo=startupinfo
+                            )
+                            val = res.stdout.strip()
+                            if val:
+                                if attr.startswith("market_name"):
+                                    if not info.market_name: info.market_name = val
+                                elif attr.startswith("model"):
+                                    if not info.model: info.model = val
+                                else:
+                                    setattr(info, attr, val)
+                        except Exception:
+                            pass
+                            
+                    build_display_name(info, mapping)
+                    self.console.log("INFO", f"Detected device: {info.display_name} [serial: {info.serial[:6]}...]")
+                    device_infos.append(info)
+                    
+                if device_infos:
+                    on_success(device_infos)
                 else:
                     on_error("no_devices")
             else:

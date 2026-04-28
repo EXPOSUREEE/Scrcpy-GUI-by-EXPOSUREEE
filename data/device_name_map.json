@@ -1,0 +1,13 @@
+{
+  "samsung": {
+    "SM-S928B": "Samsung Galaxy S24 Ultra",
+    "SM-S928U": "Samsung Galaxy S24 Ultra",
+    "SM-S918B": "Samsung Galaxy S23 Ultra"
+  },
+  "google": {
+    "Pixel 9 Pro": "Google Pixel 9 Pro"
+  },
+  "xiaomi": {
+    "24030PN60G": "Xiaomi 14 Ultra"
+  }
+}

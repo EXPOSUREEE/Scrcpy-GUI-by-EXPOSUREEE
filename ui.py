@@ -111,6 +111,9 @@ class ScrcpyGUI:
         self.workflow_issue_action = None
         self.workflow_issue_action_label = ""
         self.active_processes = []
+        self.device_label_to_serial = {}
+        self.device_serial_to_label = {}
+        self.device_infos = []
         
         config.load_config(self, self.config_file)
         self.attach_variable_traces()
@@ -271,10 +274,14 @@ class ScrcpyGUI:
 
     def get_selected_device(self):
         if not hasattr(self, "device_combo"): return ""
-        try: serial = self.device_combo.get().strip()
+        try: label = self.device_combo.get().strip()
         except Exception: return ""
-        if not serial or serial == "No devices found": return ""
-        return serial
+        serial = getattr(self, "device_label_to_serial", {}).get(label)
+        if serial:
+            return serial
+        if label and label != "No devices found":
+            return label
+        return ""
 
     def set_workflow_issue(self, message, hint="", action=None, action_label="Review next step"):
         self.workflow_issue_message = message
@@ -949,19 +956,39 @@ class ScrcpyGUI:
         self.adb.refresh_devices(on_success, on_error)
 
     def _refresh_devices_success(self, devices):
-        preferred_wireless = f"{self.var_ip.get().strip()}:5555" if self.var_ip.get().strip() else ""
-        selected_device = preferred_wireless if preferred_wireless in devices else devices[0]
-        self.device_combo.configure(values=devices)
-        self.device_combo.set(selected_device)
+        self.device_infos = devices
+        self.device_label_to_serial = {}
+        self.device_serial_to_label = {}
+        
+        display_names = []
+        name_counts = {}
+        for d in devices:
+            name_counts[d.display_name] = name_counts.get(d.display_name, 0) + 1
+            
+        for d in devices:
+            label = d.display_name
+            if name_counts[d.display_name] > 1:
+                label = f"{d.display_name} \u00b7 {d.serial[:6]}"
+            display_names.append(label)
+            self.device_label_to_serial[label] = d.serial
+            self.device_serial_to_label[d.serial] = label
+
+        preferred_wireless_serial = f"{self.var_ip.get().strip()}:5555" if self.var_ip.get().strip() else ""
+        selected_serial = preferred_wireless_serial if preferred_wireless_serial in self.device_serial_to_label else devices[0].serial
+        selected_label = self.device_serial_to_label[selected_serial]
+        
+        self.device_combo.configure(values=display_names)
+        self.device_combo.set(selected_label)
         self.device_count_var.set(str(len(devices)))
-        self.workflow_wireless_ready = ":" in selected_device
+        self.workflow_wireless_ready = ":" in selected_serial
+        
         if self.workflow_wireless_ready:
-            self.connection_summary_var.set(f"Wireless ready on {selected_device}")
-            self.set_status(f"Wireless device detected: {selected_device}")
+            self.connection_summary_var.set(f"Wireless ready on {selected_label}")
+            self.set_status(f"Wireless device detected: {selected_label}")
         else:
-            self.connection_summary_var.set(f"USB ready on {selected_device}")
-            self.set_status(f"Connected device detected: {selected_device}")
-        self.console_mgr.log("INFO", f"Selected device: {selected_device}")
+            self.connection_summary_var.set(f"USB ready on {selected_label}")
+            self.set_status(f"Connected device detected: {selected_label}")
+        self.console_mgr.log("INFO", f"Selected device: {selected_label} [{selected_serial[:6]}]")
         self.clear_workflow_issue()
 
     def _refresh_devices_error(self, reason):
@@ -979,7 +1006,7 @@ class ScrcpyGUI:
             self.set_workflow_issue("ADB did not answer the device scan.", "Make sure adb is available, then try Scan devices or Kill ADB if the server is stuck.", self.kill_adb_server, "Kill ADB")
 
     def get_device_ip(self):
-        serial = self.device_combo.get()
+        serial = self.get_selected_device()
         if not serial or serial == "No devices found":
             messagebox.showwarning("Error", "Select a device connected via USB first.")
             self.console_mgr.log("WARN", "Cannot fetch IP without a selected USB device.")
@@ -1008,7 +1035,7 @@ class ScrcpyGUI:
         messagebox.showinfo("Info", "Could not automatically find IP.\nPlease check if Wi-Fi is connected on the phone.")
 
     def enable_tcpip(self):
-        serial = self.device_combo.get()
+        serial = self.get_selected_device()
         if not serial or serial == "No devices found":
             messagebox.showwarning("Error", "Select a device connected via USB first.")
             self.console_mgr.log("WARN", "Cannot enable TCP/IP without a selected USB device.")
@@ -1132,7 +1159,7 @@ class ScrcpyGUI:
             return
 
         settings = {key: getattr(self, var_name).get() for key, (var_name, _, _) in config.CONFIG_FIELDS.items()}
-        settings["device_serial"] = self.device_combo.get()
+        settings["device_serial"] = self.get_selected_device()
         settings["scrcpy_exe"] = self.scrcpy_exe
 
         cmd = build_scrcpy_command(settings)
