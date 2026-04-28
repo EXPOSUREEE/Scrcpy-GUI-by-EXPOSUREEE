@@ -43,8 +43,8 @@ MUTED_TEXT = "#9faddf"
 ACCENT = "#7d5cff"
 ACCENT_HOVER = "#9277ff"
 ACCENT_ALT = "#35d6ff"
-GUIDE_BG = "#0A2E1F"
-GUIDE_BORDER = "#145239"
+GUIDE_BG = "#0c2b3e"
+GUIDE_BORDER = "#35d6ff"
 SUCCESS = "#28d78a"
 SUCCESS_HOVER = "#1fb977"
 WARNING = "#ff8b6b"
@@ -309,39 +309,39 @@ class ScrcpyGUI:
             detail = self.workflow_issue_message
             if self.workflow_issue_hint: detail = f"{detail}\n{self.workflow_issue_hint}"
             payload = {
-                "step": "Needs attention", "title": "Something needs your input", "detail": detail,
+                "step": "Needs attention", "title": "Something went wrong", "detail": detail,
                 "action_label": self.workflow_issue_action_label or "Open Console",
                 "action": self.workflow_issue_action or (lambda: self.switch_tab("Console")),
             }
         elif not usb_ready:
             payload = {
-                "step": "Step 1 of 5", "title": "Connect your phone by USB",
-                "detail": "1. Spam tap 'Build number' in Settings to unlock Developer Options.\n2. Enable 'USB debugging'.\n3. Connect via USB and click Scan devices.",
+                "step": "Step 1", "title": "Plug in your phone!",
+                "detail": "Go to your phone settings, spam tap 'Build number' to unlock Developer Options, and turn on 'USB debugging'. Then plug it in and hit Scan.",
                 "action_label": "Scan devices", "action": self.refresh_devices,
             }
         elif not ip:
             payload = {
-                "step": "Step 2 of 5", "title": "USB Connected",
-                "detail": "You can start mirroring over USB right now, or continue the setup for wireless mirroring.",
+                "step": "Step 2", "title": "Phone Detected!",
+                "detail": "Awesome! You can start mirroring over the cable right now, or keep going to set up wireless.",
                 "action_label": "Start USB Mirror", "action": self.start_scrcpy,
                 "action_2_label": "Continue Wireless", "action_2": self.get_device_ip,
             }
         elif not self.workflow_tcpip_enabled:
             payload = {
-                "step": "Step 3 of 5", "title": "Enable ADB over TCP/IP",
-                "detail": "The phone IP is ready. Enable TCP/IP on port 5555 before switching away from USB.",
+                "step": "Step 3", "title": "Prep for Wireless",
+                "detail": "Click the button below to tell your phone it's okay to connect over Wi-Fi.",
                 "action_label": "Enable TCP/IP", "action": self.enable_tcpip,
             }
         elif not wireless_ready:
             payload = {
-                "step": "Step 4 of 5", "title": "Connect wirelessly",
-                "detail": "ADB is prepared for Wi-Fi. Click Connect Wi-Fi, wait for success, then you can unplug USB.",
+                "step": "Step 4", "title": "Connect Wi-Fi",
+                "detail": "Click Connect Wi-Fi. Once it says success, you can finally unplug the cable!",
                 "action_label": "Connect Wi-Fi", "action": self.connect_wireless,
             }
         else:
             payload = {
-                "step": "Step 5 of 5", "title": "Start mirroring",
-                "detail": "Wireless ADB is ready. You can start mirroring now.",
+                "step": "Step 5", "title": "All Set!",
+                "detail": "You are connected wirelessly. Click Start Mirroring to see your screen!",
                 "action_label": "Start Mirroring", "action": self.start_scrcpy,
             }
 
@@ -469,6 +469,26 @@ class ScrcpyGUI:
         title_widget.configure(wraplength=wrap)
         if subtitle_widget is not None: subtitle_widget.configure(wraplength=wrap)
 
+    def make_accordion_section(self, parent, title):
+        container = ctk.CTkFrame(parent, fg_color="transparent")
+        
+        header_var = ctk.StringVar(value=f"{title}  ▼")
+        btn = ctk.CTkButton(container, textvariable=header_var, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=6, height=36, font=self.fonts["button"], anchor="w")
+        btn.pack(fill="x", pady=4)
+        
+        inner_frame = ctk.CTkFrame(container, fg_color="transparent")
+        
+        def toggle():
+            if inner_frame.winfo_ismapped():
+                inner_frame.pack_forget()
+                header_var.set(f"{title}  ▼")
+            else:
+                inner_frame.pack(fill="x", padx=16, pady=(4, 8))
+                header_var.set(f"{title}  ▲")
+                
+        btn.configure(command=toggle)
+        return container, inner_frame
+
     def make_action_button(self, parent, text, command, width=132):
         return ctk.CTkButton(parent, text=text, width=width, height=38, command=command, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=8, font=self.fonts["button"])
 
@@ -528,11 +548,10 @@ class ScrcpyGUI:
         nav = ctk.CTkFrame(sidebar, fg_color="transparent")
         nav.pack(fill="x", padx=14, pady=(10, 0))
         self.sidebar_nav_buttons = {}
-        for tab in ["Connection", "Video & Audio", "Advanced", "Console"]:
+        for tab in ["Connection", "Video & Audio", "Advanced", "Console", "Tutorials"]:
             btn = self.make_sidebar_button(nav, tab, lambda t=tab: self.switch_tab(t), active=(tab=="Connection"))
             btn.pack(fill="x", pady=4)
             self.sidebar_nav_buttons[tab] = btn
-        self.make_sidebar_button(nav, "Tutorial", self.open_tutorial).pack(fill="x", pady=4)
 
         sidebar_footer = ctk.CTkFrame(sidebar, fg_color="transparent")
         sidebar_footer.pack(side="bottom", fill="x", padx=18, pady=18)
@@ -561,20 +580,155 @@ class ScrcpyGUI:
         self.make_section_label(header_copy, "Control Workspace", "Everything below is still functional, just easier to scan and operate.")
         header_actions = ctk.CTkFrame(workspace_header, fg_color="transparent")
         header_actions.pack(side="right")
-        self.make_action_button(header_actions, "Watch tutorial", self.open_tutorial, width=140).pack(side="left", padx=(0, 10))
         self.btn_start = self.make_primary_button(header_actions, "Start Mirroring", self.start_scrcpy, height=42)
         self.btn_start.pack(side="left")
 
         self.tabview = ctk.CTkTabview(workspace, fg_color=PANEL_BG, segmented_button_fg_color=FIELD_BG, segmented_button_selected_color=ACCENT, segmented_button_selected_hover_color=ACCENT_HOVER, segmented_button_unselected_color=FIELD_BG, segmented_button_unselected_hover_color=CARD_HOVER, text_color=TEXT, corner_radius=12, border_width=0, command=self.sync_sidebar_tab_state)
         self.tabview.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        for tab in ["Connection", "Video & Audio", "Advanced", "Console"]: self.tabview.add(tab)
+        for tab in ["Connection", "Video & Audio", "Advanced", "Console", "Tutorials"]: self.tabview.add(tab)
 
         self.build_connection_tab(self.tabview.tab("Connection"))
         self.build_video_tab(self.tabview.tab("Video & Audio"))
         self.build_advanced_tab(self.tabview.tab("Advanced"))
         self.build_console_tab(self.tabview.tab("Console"))
+        self.build_tutorials_tab(self.tabview.tab("Tutorials"))
         self.sync_sidebar_tab_state("Connection")
         self.build_right_rail(right_rail_content)
+
+    def build_tutorials_tab(self, parent):
+        import webbrowser
+        
+        nav_var = ctk.StringVar(value="USB Debugging")
+        self.tutorial_nav_var = nav_var
+        self.tutorial_nav_segmented = ctk.CTkSegmentedButton(
+            parent, 
+            values=["USB Debugging", "Docs", "Videos", "faQs"], 
+            variable=self.tutorial_nav_var,
+            font=self.fonts["body_bold"],
+            fg_color=FIELD_BG, 
+            selected_color=ACCENT, 
+            selected_hover_color=ACCENT_HOVER, 
+            unselected_color=FIELD_BG, 
+            unselected_hover_color=CARD_HOVER
+        )
+        self.tutorial_nav_segmented.pack(fill="x", padx=24, pady=(10, 0))
+
+        content_area = ctk.CTkFrame(parent, fg_color="transparent")
+        content_area.pack(fill="both", expand=True, padx=6, pady=10)
+
+        frames = {}
+
+        usb_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
+        frames["USB Debugging"] = usb_frame
+        
+        brands_frame = self.make_card(usb_frame, "Enable USB Debugging", "Find the exact steps for your smartphone manufacturer.")
+        brands_frame.pack(fill="x", pady=(0, 16), padx=6)
+        
+        grid_container = ctk.CTkFrame(brands_frame, fg_color="transparent")
+        grid_container.pack(fill="x", padx=18, pady=(12, 12))
+        
+        brand_names = ["Samsung", "Xiaomi", "OnePlus", "Oppo", "Vivo", "Realme", "Motorola", "Others"]
+        
+        links_container = ctk.CTkFrame(brands_frame, fg_color=FIELD_BG, corner_radius=8)
+        
+        def show_brand_videos(brand):
+            for widget in links_container.winfo_children():
+                widget.destroy()
+            
+            links_container.pack(fill="x", padx=18, pady=(0, 18))
+            ctk.CTkLabel(links_container, text=f"Tutorials for {brand}", font=self.fonts["body_bold"], text_color=TEXT).pack(anchor="w", padx=16, pady=(12, 8))
+            
+            for i in range(1, 4):
+                btn = self.make_action_button(links_container, f"▶  {brand} Tutorial {i}", lambda u="https://youtube.com/watch?v=placeholder": webbrowser.open(u), width=300)
+                btn.pack(fill="x", padx=16, pady=(0, 8))
+                btn.configure(anchor="w")
+
+        for i, brand in enumerate(brand_names):
+            row = i // 4
+            col = i % 4
+            grid_container.grid_columnconfigure(col, weight=1)
+            btn = ctk.CTkButton(grid_container, text=brand, command=lambda b=brand: show_brand_videos(b), fg_color=PANEL_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, font=self.fonts["body"])
+            btn.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
+
+        docs_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
+        frames["Docs"] = docs_frame
+        
+        docs_card = self.make_card(docs_frame, "Written Docs & Links", "Official project resources and downloads.")
+        docs_card.pack(fill="x", pady=(0, 16), padx=6)
+        docs_inner = ctk.CTkFrame(docs_card, fg_color="transparent")
+        docs_inner.pack(fill="x", padx=18, pady=(12, 18))
+        
+        btn_github = self.make_action_button(docs_inner, "GitHub Repository", lambda: webbrowser.open("https://github.com/EXPOSUREEE"), width=200)
+        btn_github.pack(side="left", padx=(0, 10))
+        btn_web = self.make_action_button(docs_inner, "Official Website & Downloads", lambda: webbrowser.open("https://exposureee.in/scrcpy-gui-by-exposureee/"), width=250)
+        btn_web.pack(side="left")
+
+        videos_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
+        frames["Videos"] = videos_frame
+        
+        video_card = self.make_card(videos_frame, "Video by Exposureee", "Watch step-by-step guides from the creator.")
+        video_card.pack(fill="x", pady=(0, 16), padx=6)
+        video_inner = ctk.CTkFrame(video_card, fg_color="transparent")
+        video_inner.pack(fill="x", padx=18, pady=(12, 18))
+
+        videos = [
+            ("I Updated Scrcpy GUI: Now It's Perfect for Android Screen Mirroring", "https://youtu.be/U7byl9CLkU4"),
+            ("Best Free Android to PC Screen Mirroring Software in 2025", "https://youtu.be/pWKY_dntX5c"),
+            ("Screen Mirroring of BGMI & Free Fire : Mic / Audio Problem Fixed", "https://youtu.be/I8-rieyx7h8"),
+            ("I Updated My Android to PC Screen Mirroring Software - No More Errors", "https://youtu.be/-4pRCRFoCZg"),
+            ("New Android to PC Screen Mirroring Software with Amazing Features", "https://youtu.be/dWj5Mw2k3BE"),
+            ("Free Android to PC Screen Mirroring Software just for You", "https://youtu.be/WHUsT8Hekoc"),
+            ("SCRCPY have MORE FEATURES than ApowerMirror & Douwan", "https://youtu.be/smVw6w8bTKk"),
+        ]
+        
+        for title, url in videos:
+            btn = self.make_action_button(video_inner, f"▶  {title}", lambda u=url: webbrowser.open(u), width=500)
+            btn.pack(fill="x", pady=(0, 8))
+            btn.configure(anchor="w")
+
+        others_card = self.make_card(videos_frame, "Video tutorials by others", "Community created guides and reviews.")
+        others_card.pack(fill="x", pady=(0, 16), padx=6)
+        others_inner = ctk.CTkFrame(others_card, fg_color="transparent")
+        others_inner.pack(fill="x", padx=18, pady=(12, 18))
+        
+        for i in range(1, 4):
+            btn = self.make_action_button(others_inner, f"▶  Community Tutorial {i}", lambda u="https://youtube.com/watch?v=placeholder": webbrowser.open(u), width=500)
+            btn.pack(fill="x", pady=(0, 8))
+            btn.configure(anchor="w")
+
+        faqs_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
+        frames["faQs"] = faqs_frame
+        
+        faq_card = self.make_card(faqs_frame, "Frequently Asked Questions", "Quick solutions to common issues.")
+        faq_card.pack(fill="x", pady=(0, 16), padx=6)
+        faq_inner = ctk.CTkFrame(faq_card, fg_color="transparent")
+        faq_inner.pack(fill="x", padx=18, pady=(12, 18))
+
+        faqs = [
+            ("Q: My phone is not detected when I scan?", "A: Make sure Developer Options are unlocked and 'USB debugging' is enabled on your phone. Re-plug the USB and check for an authorization prompt on your phone's screen."),
+            ("Q: How do I connect wirelessly?", "A: First connect via USB. Wait for it to show 'USB Connected' in the Next Step guide, then click 'Continue Wireless' -> 'Enable TCP/IP' -> 'Connect Wi-Fi'."),
+            ("Q: Why is there no audio playing?", "A: Audio forwarding is only supported on Android 11+. Ensure you haven't checked 'Disable audio' in the Advanced tab."),
+            ("Q: The stream is lagging or pixelated?", "A: In the Video & Audio tab, lower the Bitrate (e.g. 4 Mbps) or set a Max Size (e.g. 1080) to reduce the network/USB load.")
+        ]
+
+        for q, a in faqs:
+            q_label = ctk.CTkLabel(faq_inner, text=q, font=self.fonts["body_bold"], text_color=TEXT, justify="left", anchor="w")
+            q_label.pack(fill="x", pady=(8, 2))
+            a_label = ctk.CTkLabel(faq_inner, text=a, font=self.fonts["body"], text_color=MUTED_TEXT, justify="left", anchor="w", wraplength=450)
+            a_label.pack(fill="x", pady=(0, 12))
+            faq_card.bind("<Configure>", lambda e, a_widget=a_label: a_widget.configure(wraplength=max(200, e.width - 80)), add="+")
+
+        def switch_subtab(selected_tab):
+            self.tutorial_nav_var.set(selected_tab)
+            for name, frame in frames.items():
+                if name == selected_tab:
+                    frame.pack(fill="both", expand=True)
+                else:
+                    frame.pack_forget()
+                    
+        self.tutorial_switch_subtab = switch_subtab
+        self.tutorial_nav_segmented.configure(command=switch_subtab)
+        switch_subtab("USB Debugging")
 
     def build_right_rail(self, parent):
         session_card = self.make_card(parent, "Current Session", "Live device and launch feedback.")
@@ -584,7 +738,7 @@ class ScrcpyGUI:
         self.make_info_row(session_card, "Quality", self.quality_summary_var)
         self.make_info_row(session_card, "Audio", self.audio_summary_var)
 
-        guidance_card = self.make_card(parent, "Next Step", "A guided flow so the app can tell the user what should happen next.", fg_color=GUIDE_BG, border_color=GUIDE_BORDER)
+        guidance_card = self.make_card(parent, "Need Help?", "Stuck and don't know what to do? Follow this.", fg_color=GUIDE_BG, border_color=GUIDE_BORDER)
         guidance_card.pack(fill="x", padx=16, pady=(0, 14))
         ctk.CTkLabel(guidance_card, textvariable=self.guidance_step_var, font=self.fonts["caption_bold"], text_color=ACCENT_ALT, justify="left", anchor="w").pack(fill="x", padx=20, pady=(4, 2))
         ctk.CTkLabel(guidance_card, textvariable=self.guidance_title_var, font=self.fonts["body_bold"], text_color=TEXT, justify="left", anchor="w").pack(fill="x", padx=20, pady=(0, 6))
@@ -598,6 +752,15 @@ class ScrcpyGUI:
         self.guidance_button_2 = self.make_action_button(self.guidance_action_frame, "Secondary", self.run_guidance_action_2)
         self.guidance_button_2.pack(fill="x", pady=(8, 0))
         self.guidance_button_2.pack_forget()
+
+        def go_to_tutorials(e=None):
+            self.switch_tab("Tutorials")
+            if hasattr(self, 'tutorial_switch_subtab'):
+                self.tutorial_switch_subtab("USB Debugging")
+
+        tutorial_link = ctk.CTkLabel(self.guidance_action_frame, text="Watch the tutorial of your own brand phone by clicking here.", font=self.fonts["caption"], text_color=ACCENT_ALT, cursor="hand2", justify="left", wraplength=230)
+        tutorial_link.pack(fill="x", pady=(12, 0))
+        tutorial_link.bind("<Button-1>", go_to_tutorials)
 
         quick_card = self.make_card(parent, "Quick Actions", "High-frequency tools without opening another tab.")
         quick_card.pack(fill="x", padx=16, pady=(0, 14))
