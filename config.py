@@ -11,6 +11,7 @@ CONFIG_FIELDS = {
     "video_codec": ("var_video_codec", "StringVar", "h264"),
     "audio_codec": ("var_audio_codec", "StringVar", "opus"),
     "cam_ar": ("cam_ar_combo_val", "StringVar", "Full Sensor (Default)"),
+    "cam_orientation": ("cam_orientation_combo_val", "StringVar", "0° (Default)"),
     "renderer": ("renderer_combo_val", "StringVar", "software"),
     "orientation": ("orientation_combo_val", "StringVar", "Auto (Rotate with Phone)"),
     "always_on_top": ("var_always_on_top", "BooleanVar", False),

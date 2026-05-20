@@ -51,6 +51,14 @@ def build_scrcpy_command(settings: dict) -> list:
         cam_ar = settings.get("cam_ar", "Full Sensor (Default)")
         if cam_ar != "Full Sensor (Default)":
             cmd.append(f"--camera-ar={cam_ar}")
+            
+        cam_orient = settings.get("cam_orientation", "0° (Default)")
+        if "90" in cam_orient:
+            cmd.append("--orientation=90")
+        elif "180" in cam_orient:
+            cmd.append("--orientation=180")
+        elif "270" in cam_orient:
+            cmd.append("--orientation=270")
     
     # --- VIDEO & AUDIO SETTINGS ---
     if not is_mic_only: 

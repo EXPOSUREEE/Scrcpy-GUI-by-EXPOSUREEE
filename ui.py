@@ -104,6 +104,10 @@ class ScrcpyGUI:
         self.recording_status_var = ctk.StringVar(value="Off")
         self.recording_detail_var = ctk.StringVar(value="MP4 capture idle")
         
+        self.var_pair_port = ctk.StringVar(value="")
+        self.var_pair_code = ctk.StringVar(value="")
+        self.var_connect_port = ctk.StringVar(value="")
+        
         self.workflow_tcpip_enabled = False
         self.workflow_wireless_ready = False
         self.workflow_issue_message = ""
@@ -834,18 +838,79 @@ class ScrcpyGUI:
         self.device_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.make_action_button(inner_dev, "Scan devices", self.refresh_devices).pack(side="right")
 
-        workflow = self.make_card(canvas, "Wireless Mode", "Use USB once, switch ADB to TCP/IP, then reconnect from the same network.")
+        workflow = self.make_card(canvas, "Wireless Mode", "Connect your device over Wi-Fi, with or without a USB cable.")
         workflow.pack(fill="x", pady=(0, 16), padx=6)
-        r_ip = ctk.CTkFrame(workflow, fg_color="transparent")
-        r_ip.pack(fill="x", padx=18, pady=(12, 10))
+        
+        # Segmented button to switch between methods
+        self.wireless_method_var = ctk.StringVar(value="USB Assisted")
+        self.wireless_method_segmented = ctk.CTkSegmentedButton(
+            workflow,
+            values=["USB Assisted", "Direct Pairing (Android 11+)"],
+            variable=self.wireless_method_var,
+            font=self.fonts["body_bold"],
+            fg_color=FIELD_BG,
+            selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER,
+            unselected_color=FIELD_BG,
+            unselected_hover_color=CARD_HOVER,
+            command=self.toggle_wireless_method
+        )
+        self.wireless_method_segmented.pack(fill="x", padx=18, pady=(10, 10))
+        
+        # Frame for USB Assisted Wireless
+        self.usb_wireless_frame = ctk.CTkFrame(workflow, fg_color="transparent")
+        self.usb_wireless_frame.pack(fill="x", padx=0, pady=0)
+        
+        r_ip = ctk.CTkFrame(self.usb_wireless_frame, fg_color="transparent")
+        r_ip.pack(fill="x", padx=18, pady=(0, 10))
         ctk.CTkLabel(r_ip, text="Device IP", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
         self.make_input(r_ip, textvariable=self.var_ip, placeholder_text="192.168.1.25").pack(side="left", fill="x", expand=True, padx=(10, 10))
         self.make_action_button(r_ip, "Auto get IP", self.get_device_ip).pack(side="right")
 
-        r_wbtn = ctk.CTkFrame(workflow, fg_color="transparent")
+        r_wbtn = ctk.CTkFrame(self.usb_wireless_frame, fg_color="transparent")
         r_wbtn.pack(fill="x", padx=18, pady=(0, 18))
         self.make_action_button(r_wbtn, "Enable TCP/IP", self.enable_tcpip, width=160).pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.make_action_button(r_wbtn, "Connect wirelessly", self.connect_wireless, width=170).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # Frame for Direct Wireless Pairing (Android 11+)
+        self.direct_wireless_frame = ctk.CTkFrame(workflow, fg_color="transparent")
+        
+        # IP Row: Device IP and Pairing Port
+        r_direct_ip = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
+        r_direct_ip.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkLabel(r_direct_ip, text="Device IP", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_ip, textvariable=self.var_ip, placeholder_text="192.168.1.25").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        
+        ctk.CTkLabel(r_direct_ip, text="Pairing Port", width=80, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_ip, textvariable=self.var_pair_port, placeholder_text="37283", width=80).pack(side="left", padx=(10, 0))
+        
+        # Pairing Code Row
+        r_direct_code = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
+        r_direct_code.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkLabel(r_direct_code, text="Pairing Code", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_code, textvariable=self.var_pair_code, placeholder_text="123456").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.make_action_button(r_direct_code, "Pair Device", self.pair_wireless, width=120).pack(side="right")
+        
+        # Connection Port Row
+        r_direct_connect = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
+        r_direct_connect.pack(fill="x", padx=18, pady=(0, 10))
+        ctk.CTkLabel(r_direct_connect, text="Connect Port", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_connect, textvariable=self.var_connect_port, placeholder_text="42911").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.make_action_button(r_direct_connect, "Auto-detect", self.auto_detect_port, width=110).pack(side="left")
+        self.make_action_button(r_direct_connect, "Connect", self.connect_wireless_direct, width=120).pack(side="right", padx=(10, 0))
+
+        # QR Code note frame
+        qr_note = ctk.CTkFrame(self.direct_wireless_frame, fg_color=FIELD_BG, border_color=BORDER, border_width=1, corner_radius=8)
+        qr_note.pack(fill="x", padx=18, pady=(0, 18))
+        
+        ctk.CTkLabel(qr_note, text="💡 Looking for QR Code Pairing?", font=self.fonts["body_bold"], text_color=ACCENT_ALT, justify="left", anchor="w").pack(fill="x", padx=16, pady=(10, 2))
+        
+        note_text = (
+            "Android's QR pairing requires a heavy background service exclusive to full IDEs like Android Studio. "
+            "For lightweight wrappers (like Scrcpy Deck), the Pairing Code method above is the standard, secure, "
+            "and highly reliable way. Simply enter the 6-digit code shown on your phone's screen to pair instantly!"
+        )
+        ctk.CTkLabel(qr_note, text=note_text, font=self.fonts["caption"], text_color=MUTED_TEXT, justify="left", anchor="w", wraplength=480).pack(fill="x", padx=16, pady=(0, 10))
 
         tips = self.make_card(canvas, "Connection Notes", "A short checklist so the wireless flow stays predictable.")
         tips.pack(fill="x", padx=6)
@@ -866,11 +931,15 @@ class ScrcpyGUI:
         src_frame = self.make_card(canvas, "Source", "Pick what scrcpy should stream from your phone.")
         src_frame.pack(fill="x", pady=(0, 16), padx=6)
         inner_src = ctk.CTkFrame(src_frame, fg_color="transparent")
-        inner_src.pack(fill="x", padx=18, pady=(12, 18))
+        inner_src.pack(fill="x", padx=18, pady=(12, 10))
         self.make_radio(inner_src, "Screen", "screen").pack(side="left", padx=(0, 18))
         self.make_radio(inner_src, "Back Camera", "camera_back").pack(side="left", padx=(0, 18))
         self.make_radio(inner_src, "Front Camera", "camera_front").pack(side="left", padx=(0, 18))
         self.make_radio(inner_src, "Only Microphone", "mic_only").pack(side="left")
+
+        inner_src_opts = ctk.CTkFrame(src_frame, fg_color="transparent")
+        inner_src_opts.pack(fill="x", padx=18, pady=(0, 18))
+        self.make_labeled_combo_row(inner_src_opts, "Cam rotate", self.cam_orientation_combo_val, ["0° (Default)", "90°", "180°", "270°"], width=120).pack(side="left")
 
         qual_frame = self.make_card(canvas, "Quality", "Keep defaults for smooth mirroring, or tune for sharper output.")
         qual_frame.pack(fill="x", pady=(0, 16), padx=6)
@@ -1080,20 +1149,138 @@ class ScrcpyGUI:
 
         self.adb.connect_wireless(ip, on_success, on_error)
 
+    def toggle_wireless_method(self, method):
+        if method == "USB Assisted":
+            if hasattr(self, "direct_wireless_frame"):
+                self.direct_wireless_frame.pack_forget()
+            if hasattr(self, "usb_wireless_frame"):
+                self.usb_wireless_frame.pack(fill="x", padx=0, pady=0)
+        else:
+            if hasattr(self, "usb_wireless_frame"):
+                self.usb_wireless_frame.pack_forget()
+            if hasattr(self, "direct_wireless_frame"):
+                self.direct_wireless_frame.pack(fill="x", padx=0, pady=0)
+
+    def pair_wireless(self):
+        ip = self.var_ip.get().strip()
+        port = self.var_pair_port.get().strip()
+        code = self.var_pair_code.get().strip()
+        
+        if not ip:
+            messagebox.showwarning("Error", "Please enter the Device IP address.")
+            return
+        if not port:
+            messagebox.showwarning("Error", "Please enter the Pairing Port.")
+            return
+        if not code:
+            messagebox.showwarning("Error", "Please enter the 6-digit Pairing Code.")
+            return
+            
+        ip_port = f"{ip}:{port}"
+        self.set_status(f"Pairing wirelessly with {ip_port}...")
+        
+        def on_success():
+            self.root.after(0, self._pair_wireless_success, ip_port)
+        def on_error(reason):
+            self.root.after(0, self._pair_wireless_error, ip_port, reason)
+            
+        self.adb.pair_wireless(ip_port, code, on_success, on_error)
+        
+    def _pair_wireless_success(self, ip_port):
+        self.set_status(f"Successfully paired with {ip_port}!")
+        self.console_mgr.log("INFO", f"Successfully paired with {ip_port}.")
+        messagebox.showinfo("Success", f"Successfully paired with {ip_port}!\n\nNow, close the pairing dialog on your phone, find the active connection 'IP address & Port', enter the port in the Connect Port field, and click Connect.")
+        self.clear_workflow_issue()
+        
+    def _pair_wireless_error(self, ip_port, reason):
+        self.set_status(f"Pairing with {ip_port} failed.")
+        self.console_mgr.log("ERROR", f"Wireless pairing with {ip_port} failed: {reason}")
+        messagebox.showerror("Error", f"Failed to pair with {ip_port}.\nADB says: {reason or 'No response'}")
+
+    def connect_wireless_direct(self):
+        ip = self.var_ip.get().strip()
+        port = self.var_connect_port.get().strip()
+        if not ip:
+            messagebox.showwarning("Error", "Please enter the Device IP address.")
+            return
+        if not port:
+            messagebox.showwarning("Error", "Please enter the Connection Port.")
+            return
+        
+        ip_port = f"{ip}:{port}"
+        self.set_status(f"Connecting wirelessly to {ip_port}...")
+        
+        def on_success():
+            self.root.after(0, self._connect_wireless_success, ip_port)
+        def on_error(reason):
+            self.root.after(0, self._connect_wireless_error, ip_port, reason)
+            
+        self.adb.connect_wireless(ip_port, on_success, on_error)
+
     def _connect_wireless_success(self, ip):
-        self.connection_summary_var.set(f"Wireless ADB linked to {ip}:5555")
-        self.set_status(f"Successfully connected to {ip}")
+        display_target = ip if ":" in ip else f"{ip}:5555"
+        self.connection_summary_var.set(f"Wireless ADB linked to {display_target}")
+        self.set_status(f"Successfully connected to {display_target}")
         self.workflow_wireless_ready = True
         self.clear_workflow_issue()
         self.refresh_devices()
 
     def _connect_wireless_error(self, ip, reason):
-        self.connection_summary_var.set(f"Wireless connection failed for {ip}:5555")
+        display_target = ip if ":" in ip else f"{ip}:5555"
+        self.connection_summary_var.set(f"Wireless connection failed for {display_target}")
         self.set_status("Connection failed.")
-        self.console_mgr.log("ERROR", f"Wireless connection to {ip}:5555 failed.")
+        self.console_mgr.log("ERROR", f"Wireless connection to {display_target} failed.")
         self.workflow_wireless_ready = False
-        self.set_workflow_issue(f"Wireless ADB could not connect to {ip}:5555.", "Check that the phone and PC are on the same Wi-Fi and that Enable TCP/IP completed successfully.", self.connect_wireless, "Connect Wi-Fi")
+        self.set_workflow_issue(f"Wireless ADB could not connect to {display_target}.", "Check that the phone and PC are on the same Wi-Fi and that the connection port is correct.", self.connect_wireless, "Connect Wi-Fi")
         messagebox.showerror("Error", f"Failed to connect.\nADB says: {reason or 'No response'}")
+
+    def auto_detect_port(self):
+        ip = self.var_ip.get().strip()
+        if not ip:
+            messagebox.showwarning("Error", "Please enter the Device IP address first so we can scan for it.")
+            return
+            
+        self.set_status("Scanning local network for Wireless Debugging ports...")
+        self.console_mgr.log("INFO", f"Scanning for dynamic wireless ports matching IP: {ip}...")
+        
+        def on_success(discovered):
+            self.root.after(0, self._auto_detect_port_success, ip, discovered)
+            
+        def on_error(reason):
+            self.root.after(0, self._auto_detect_port_error, reason)
+            
+        self.adb.discover_mdns_ports(on_success, on_error)
+
+    def _auto_detect_port_success(self, target_ip, discovered):
+        if target_ip in discovered:
+            port = discovered[target_ip]
+            self.var_connect_port.set(port)
+            self.set_status(f"Auto-detected active port for {target_ip}: {port}!")
+            self.console_mgr.log("INFO", f"Successfully auto-detected active port for {target_ip}: {port}.")
+            messagebox.showinfo("Success", f"⚡ Auto-detected active port: {port}!\n\nIt has been automatically entered. Click Connect to start mirroring!")
+        else:
+            self.set_status("Auto-detect failed. Device not found in scan.")
+            msg = (
+                f"Could not find any active wireless debugging service for IP '{target_ip}' in the mDNS scan.\n\n"
+                "To resolve this, please:\n"
+                "1. Go to Developer options > Wireless debugging on your phone.\n"
+                "2. Turn Wireless debugging OFF, then turn it back ON.\n"
+                "3. Verify your phone is connected to the SAME Wi-Fi network as this PC.\n"
+                "4. Wait a few seconds and try clicking Auto-detect again."
+            )
+            messagebox.showwarning("Device Not Found", msg)
+
+    def _auto_detect_port_error(self, reason):
+        self.set_status("Auto-detect scan failed.")
+        self.console_mgr.log("ERROR", f"mDNS service scan failed: {reason}")
+        msg = (
+            "Failed to scan local network for wireless debugging services.\n\n"
+            f"ADB reported:\n{reason}\n\n"
+            "Please check that your Wi-Fi is active and that ADB is running properly. "
+            "You can always enter the Connect Port manually from your phone's screen."
+        )
+        messagebox.showerror("Scan Failed", msg)
+
 
     def kill_adb_server(self):
         self.set_status("Stopping the ADB server...")

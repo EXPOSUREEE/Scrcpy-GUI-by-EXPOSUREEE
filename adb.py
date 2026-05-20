@@ -157,10 +157,22 @@ class AdbManager:
 
     def connect_wireless(self, ip, on_success, on_error):
         def task():
-            result = self.run_cmd_sync(["connect", f"{ip}:5555"], context=f"Wireless connect to {ip}:5555")
+            target = ip if ":" in ip else f"{ip}:5555"
+            result = self.run_cmd_sync(["connect", target], context=f"Wireless connect to {target}")
             output = result.stdout.strip() if result else ""
             combined = " ".join(part for part in [output, result.stderr.strip() if result else ""] if part)
             if result and result.returncode == 0 and "connected" in combined.lower():
+                on_success()
+            else:
+                on_error(combined)
+        threading.Thread(target=task, daemon=True).start()
+
+    def pair_wireless(self, ip_port, code, on_success, on_error):
+        def task():
+            result = self.run_cmd_sync(["pair", ip_port, code], context=f"Wireless pair with {ip_port}")
+            output = result.stdout.strip() if result else ""
+            combined = " ".join(part for part in [output, result.stderr.strip() if result else ""] if part)
+            if result and result.returncode == 0 and "successfully paired" in combined.lower():
                 on_success()
             else:
                 on_error(combined)
@@ -211,3 +223,21 @@ class AdbManager:
             self.run_cmd_sync(["start-server"], context="ADB start-server after pairing reset")
             on_success()
         threading.Thread(target=task, daemon=True).start()
+
+    def discover_mdns_ports(self, on_success, on_error):
+        def task():
+            result = self.run_cmd_sync(["mdns", "services"], context="ADB mdns services")
+            output = result.stdout.strip() if result else ""
+            if result and result.returncode == 0 and output:
+                found = {}
+                for line in output.splitlines():
+                    if "_adb-tls-connect._tcp" in line:
+                        match = re.search(r'(\d+\.\d+\.\d+\.\d+):(\d+)', line)
+                        if match:
+                            ip, port = match.groups()
+                            found[ip] = port
+                on_success(found)
+            else:
+                on_error(output or "No active discovered services.")
+        threading.Thread(target=task, daemon=True).start()
+
