@@ -12,6 +12,8 @@ import urllib.error
 import urllib.parse
 import webbrowser
 import tempfile
+import queue
+import math
 from datetime import datetime
 
 import config
@@ -21,7 +23,7 @@ from adb import AdbManager
 from scrcpy_command import build_scrcpy_command
 
 # --- CONFIGURATION ---
-PROGRAM_TITLE = "Scrcpy GUI Pro"
+PROGRAM_TITLE = "Scrcpy Deck"
 CURRENT_VERSION = "4.0.0"
 UPDATE_URL = "https://exposureee.in/wp-content/uploads/2024/08/Scrcpy_GUI_by_EXPOSUREEE-Version.txt"
 DOWNLOAD_URL = "https://exposureee.in/scrcpy-gui-by-exposureee/"
@@ -29,40 +31,507 @@ TUTORIAL_URL = "https://www.youtube.com/watch?v=pWKY_dntX5c"
 UPI_ID = "exposureee@upi"
 PAYEE_NAME = "Abhishek Mishra"
 
-# --- UI THEME ---
-APP_BG = "#050816"
-SHELL_BG = "#09102a"
-SIDEBAR_BG = "#0b1333"
-PANEL_BG = "#10183d"
-CARD_BG = "#151f4f"
-CARD_HOVER = "#1c2860"
-FIELD_BG = "#0b1331"
-BORDER = "#28366c"
-TEXT = "#f7f9ff"
-MUTED_TEXT = "#9faddf"
-ACCENT = "#7d5cff"
-ACCENT_HOVER = "#9277ff"
-ACCENT_ALT = "#35d6ff"
-GUIDE_BG = "#0c2b3e"
-GUIDE_BORDER = "#35d6ff"
-SUCCESS = "#28d78a"
-SUCCESS_HOVER = "#1fb977"
-WARNING = "#ff8b6b"
-CONSOLE_INFO = "#9faddf"
-CONSOLE_OUT = "#f7f9ff"
-CONSOLE_WARN = "#ffcf66"
-CONSOLE_ERR = "#ff8b6b"
-CONSOLE_HINT = "#35d6ff"
+# --- MODERN UI THEME COLOR PALETTE (Obsidian & Electric Violet) ---
+COLOR_WINDOW_BG = "#0B0B0F"       # Pitch dark canvas background
+COLOR_TITLE_BAR_BG = "#000000"    # Solid black for custom title bar
+COLOR_SIDEBAR_BG = "#111116"      # Sleek dark sidebar
+COLOR_CARD_BG = "#161622"         # Obsidian card surface
+COLOR_CARD_HOVER = "#1E1E2F"      # Tactile hover highlight
+COLOR_BORDER = "#232333"          # Subtle thin border line
+COLOR_ACCENT = "#8B5CF6"          # Electric violet / Neon purple accent
+COLOR_ACCENT_HOVER = "#A78BFA"    # Glowing light purple
+COLOR_SUCCESS = "#10B981"         # Emerald green for connected / active
+COLOR_SUCCESS_HOVER = "#059669"   # Darker success hover
+COLOR_WARNING = "#F59E0B"         # Vibrant amber for warnings
+COLOR_DANGER = "#EF4444"          # Coral red for errors / alerts
+COLOR_TEXT_PRIMARY = "#FFFFFF"    # Crisp white headers
+COLOR_TEXT_MUTED = "#8B8B9F"      # Slate grey for details / labels
+COLOR_FIELD_BG = "#0D0D14"        # Deeper dark for inputs / dropdowns
+COLOR_CONSOLE_BG = "#06060A"      # Pitch-black command line canvas background
+
+# --- BACKWARD COMPATIBLE GLOBALS (Mapped to new theme) ---
+APP_BG = COLOR_WINDOW_BG
+SHELL_BG = COLOR_SIDEBAR_BG
+SIDEBAR_BG = COLOR_SIDEBAR_BG
+PANEL_BG = COLOR_WINDOW_BG
+CARD_BG = COLOR_CARD_BG
+CARD_HOVER = COLOR_CARD_HOVER
+FIELD_BG = COLOR_FIELD_BG
+BORDER = COLOR_BORDER
+TEXT = COLOR_TEXT_PRIMARY
+MUTED_TEXT = COLOR_TEXT_MUTED
+ACCENT = COLOR_ACCENT
+ACCENT_HOVER = COLOR_ACCENT_HOVER
+ACCENT_ALT = "#35d6ff"            # Cyan highlight
+GUIDE_BG = COLOR_CARD_BG
+GUIDE_BORDER = COLOR_ACCENT
+SUCCESS = COLOR_SUCCESS
+SUCCESS_HOVER = COLOR_SUCCESS_HOVER
+WARNING = COLOR_WARNING
+CONSOLE_INFO = COLOR_TEXT_MUTED
+CONSOLE_OUT = COLOR_TEXT_PRIMARY
+CONSOLE_WARN = COLOR_WARNING
+CONSOLE_ERR = COLOR_DANGER
+CONSOLE_HINT = COLOR_ACCENT_HOVER
 
 def version_tuple(v):
     return tuple(int(x) for x in re.findall(r"\d+", v))
 
+
+# --- DYNAMIC PIL VECTOR ICON GENERATOR ---
+def create_vector_icon(icon_type, size=(24, 24), color="#FFFFFF"):
+    """
+    Generates transparent high-resolution PNG shapes in memory using PIL.
+    Guarantees razor-sharp vector-like icons across all systems without local file dependencies.
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    w, h = size
+    
+    if icon_type == "connection":  # Lightning bolt
+        points = [
+            (int(w * 0.58), int(h * 0.1)),
+            (int(w * 0.22), int(h * 0.55)),
+            (int(w * 0.5), int(h * 0.55)),
+            (int(w * 0.42), int(h * 0.9)),
+            (int(w * 0.78), int(h * 0.45)),
+            (int(w * 0.5), int(h * 0.45))
+        ]
+        draw.polygon(points, fill=color)
+    elif icon_type == "devices":  # Smartphone outline
+        draw.rounded_rectangle([int(w * 0.25), int(h * 0.12), int(w * 0.75), int(h * 0.88)], radius=4, outline=color, width=2)
+        draw.line([(int(w * 0.44), int(h * 0.2)), (int(w * 0.56), int(h * 0.2))], fill=color, width=2)  # Speaker
+        draw.line([(int(w * 0.45), int(h * 0.8)), (int(w * 0.55), int(h * 0.8))], fill=color, width=2)  # Home button
+    elif icon_type == "display":  # Monitor/Screen
+        draw.rounded_rectangle([int(w * 0.15), int(h * 0.18), int(w * 0.85), int(h * 0.7)], radius=3, outline=color, width=2)
+        draw.line([(int(w * 0.5), int(h * 0.7)), (int(w * 0.5), int(h * 0.82))], fill=color, width=2)   # Neck
+        draw.line([(int(w * 0.35), int(h * 0.82)), (int(w * 0.65), int(h * 0.82))], fill=color, width=2) # Base
+    elif icon_type == "advanced":  # Cog/Gear
+        cx, cy = int(w / 2), int(h / 2)
+        r_out = int(w * 0.28)
+        r_in = int(w * 0.12)
+        draw.ellipse([cx - r_out, cy - r_out, cx + r_out, cy + r_out], outline=color, width=2)
+        draw.ellipse([cx - r_in, cy - r_in, cx + r_in, cy + r_in], fill=color)
+        for i in range(8):
+            angle = i * math.pi / 4
+            x1 = int(cx + (r_out - 1) * math.cos(angle))
+            y1 = int(cy + (r_out - 1) * math.sin(angle))
+            x2 = int(cx + (r_out + 4) * math.cos(angle))
+            y2 = int(cy + (r_out + 4) * math.sin(angle))
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
+    elif icon_type == "console":  # Prompt `>_`
+        draw.line([(int(w * 0.2), int(h * 0.3)), (int(w * 0.45), int(h * 0.5))], fill=color, width=2)
+        draw.line([(int(w * 0.45), int(h * 0.5)), (int(w * 0.2), int(h * 0.7))], fill=color, width=2)
+        draw.line([(int(w * 0.52), int(h * 0.7)), (int(w * 0.78), int(h * 0.7))], fill=color, width=2)
+    elif icon_type == "help":  # Book
+        draw.rounded_rectangle([int(w * 0.2), int(h * 0.18), int(w * 0.8), int(h * 0.82)], radius=2, outline=color, width=2)
+        draw.line([(int(w * 0.5), int(h * 0.18)), (int(w * 0.5), int(h * 0.82))], fill=color, width=2)  # Spine
+        # Left page lines
+        draw.line([(int(w * 0.3), int(h * 0.35)), (int(w * 0.45), int(h * 0.35))], fill=color, width=1)
+        draw.line([(int(w * 0.3), int(h * 0.5)), (int(w * 0.45), int(h * 0.5))], fill=color, width=1)
+        draw.line([(int(w * 0.3), int(h * 0.65)), (int(w * 0.45), int(h * 0.65))], fill=color, width=1)
+        # Right page lines
+        draw.line([(int(w * 0.55), int(h * 0.35)), (int(w * 0.7), int(h * 0.35))], fill=color, width=1)
+        draw.line([(int(w * 0.55), int(h * 0.5)), (int(w * 0.7), int(h * 0.5))], fill=color, width=1)
+        draw.line([(int(w * 0.55), int(h * 0.65)), (int(w * 0.7), int(h * 0.65))], fill=color, width=1)
+    else:  # Bullet list dot
+        draw.ellipse([int(w * 0.35), int(h * 0.35), int(w * 0.65), int(h * 0.65)], fill=color)
+
+    return img
+
+
+def get_ctk_icon(icon_type, accent_color=COLOR_ACCENT, muted_color=COLOR_TEXT_MUTED, size=(20, 20)):
+    """Creates a transparent, multi-state CustomTkinter icon from vector assets."""
+    img_inactive = create_vector_icon(icon_type, size=size, color=muted_color)
+    img_active = create_vector_icon(icon_type, size=size, color=accent_color)
+    if img_inactive and img_active:
+        return ctk.CTkImage(light_image=img_inactive, dark_image=img_active, size=size)
+    return None
+
+
+# --- CUSTOM MODULAR RE-USABLE CARDS ---
+class DashboardCard(ctk.CTkFrame):
+    """
+    A rounded-corner container module that responds to mouse entry/exit transitions
+    to glow subtly, improving tactile interaction feedback.
+    """
+    def __init__(self, master, title="", subtitle=None, fg_color=COLOR_CARD_BG, border_color=COLOR_BORDER, border_width=1, corner_radius=16, **kwargs):
+        super().__init__(master, fg_color=fg_color, border_color=border_color, border_width=border_width, corner_radius=corner_radius, **kwargs)
+        
+        # Hover state bindings
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+        
+        # Text wrapping adjustments
+        self.bind("<Configure>", self.on_resize)
+        
+        self.title_label = None
+        self.subtitle_label = None
+        
+        if title:
+            self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
+            self.header_frame.pack(fill="x", padx=20, pady=(18, 8))
+            self.header_frame.bind("<Enter>", self.on_enter)
+            self.header_frame.bind("<Leave>", self.on_leave)
+            
+            self.title_label = ctk.CTkLabel(
+                self.header_frame,
+                text=title,
+                font=master.fonts["section"] if hasattr(master, "fonts") else ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+                text_color=COLOR_TEXT_PRIMARY,
+                anchor="w"
+            )
+            self.title_label.pack(fill="x")
+            self.title_label.bind("<Enter>", self.on_enter)
+            self.title_label.bind("<Leave>", self.on_leave)
+            
+            if subtitle:
+                self.subtitle_label = ctk.CTkLabel(
+                    self.header_frame,
+                    text=subtitle,
+                    font=master.fonts["caption"] if hasattr(master, "fonts") else ctk.CTkFont(family="Segoe UI", size=11),
+                    text_color=COLOR_TEXT_MUTED,
+                    anchor="w",
+                    justify="left"
+                )
+                self.subtitle_label.pack(fill="x", pady=(2, 0))
+                self.subtitle_label.bind("<Enter>", self.on_enter)
+                self.subtitle_label.bind("<Leave>", self.on_leave)
+
+    def on_enter(self, event=None):
+        self.configure(fg_color=COLOR_CARD_HOVER)
+
+    def on_leave(self, event=None):
+        if event:
+            # Check if the mouse cursor coordinates are actually outside the widget boundaries
+            x, y = event.x_root, event.y_root
+            containing = self.winfo_containing(x, y)
+            current = containing
+            while current:
+                if current == self:
+                    return  # Mouse is still inside the card or its children
+                current = getattr(current, "master", None)
+        self.configure(fg_color=COLOR_CARD_BG)
+
+    def on_resize(self, event):
+        if hasattr(self, "_resize_after_id") and self._resize_after_id:
+            try:
+                self.after_cancel(self._resize_after_id)
+            except Exception:
+                pass
+        
+        new_width = event.width
+        self._resize_after_id = self.after(100, lambda: self._do_resize(new_width))
+
+    def _do_resize(self, card_width):
+        self._resize_after_id = None
+        pad = 40
+        if self.title_label and self.title_label.winfo_exists():
+            try: self.title_label.configure(wraplength=max(100, card_width - pad))
+            except Exception: pass
+        if self.subtitle_label and self.subtitle_label.winfo_exists():
+            try: self.subtitle_label.configure(wraplength=max(100, card_width - pad))
+            except Exception: pass
+
+
+# --- CUSTOM SIDEBAR NAVIGATION BUTTON ---
+class SidebarNavItem(ctk.CTkFrame):
+    """
+    Left sidebar item with minimalist icon alignment and a vertical accent line indicator.
+    Designed to mimic Spotify's slim playlist navigation items with maximized density.
+    """
+    def __init__(self, master, text, icon_type, command, ctk_gui, **kwargs):
+        # Ultra-tight vertical spacing: height=22 (Spotify style)
+        super().__init__(master, fg_color="transparent", height=22, **kwargs)
+        self.ctk_gui = ctk_gui
+        self.command = command
+        self.text = text
+        
+        # Left neon indicator strip (extremely thin and centered vertically)
+        self.indicator = ctk.CTkFrame(self, width=2, height=32, fg_color="transparent", corner_radius=1)
+        self.indicator.pack(side="left", fill="y", padx=(0, 6), pady=3)
+        
+        # Crisp 16x16 vector icon for slim profile
+        self.icon = get_ctk_icon(icon_type, COLOR_ACCENT, COLOR_TEXT_MUTED, size=(16, 16))
+        
+        self.button = ctk.CTkButton(
+            self,
+            text=text,
+            image=self.icon,
+            compound="left",
+            anchor="w",
+            fg_color="transparent",
+            hover_color=COLOR_CARD_HOVER,
+            text_color=COLOR_TEXT_MUTED,
+            # Crisp, compact font: 10pt
+            font=ctk.CTkFont(family=self.ctk_gui.font_family, size=10, weight="bold"),
+            corner_radius=4,
+            command=self.on_click,
+            height=20,
+            border_spacing=2
+        )
+        self.button.pack(side="left", fill="both", expand=True)
+
+    def set_active(self, active):
+        if active:
+            self.indicator.configure(fg_color=COLOR_ACCENT)
+            self.button.configure(
+                text_color=COLOR_TEXT_PRIMARY,
+                fg_color=COLOR_CARD_HOVER
+            )
+        else:
+            self.indicator.configure(fg_color="transparent")
+            self.button.configure(
+                text_color=COLOR_TEXT_MUTED,
+                fg_color="transparent"
+            )
+
+    def on_click(self):
+        self.command()
+
+
+
+# --- DIALOG TO EDIT SAVED DEVICE DETAILS ---
+class SavedDeviceDialog(ctk.CTkToplevel):
+    def __init__(self, parent, device, on_save):
+        super().__init__(parent.root)
+        self.device = device
+        self.on_save = on_save
+        
+        self.title("Edit Saved Device")
+        self.configure(fg_color=COLOR_WINDOW_BG)
+        
+        self.width = 400
+        self.height = 300 if device.get("type") == "wireless" else 240
+        self.geometry(f"{self.width}x{self.height}")
+        self.resizable(False, False)
+        
+        # Modal configuration
+        self.transient(parent.root)
+        self.grab_set()
+        
+        # Center coordinates
+        parent_x = parent.root.winfo_rootx()
+        parent_y = parent.root.winfo_rooty()
+        parent_w = parent.root.winfo_width()
+        parent_h = parent.root.winfo_height()
+        x = parent_x + (parent_w - self.width) // 2
+        y = parent_y + (parent_h - self.height) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        title_label = ctk.CTkLabel(self, text="Edit Device Details", font=parent.fonts["section"], text_color=COLOR_TEXT_PRIMARY)
+        title_label.pack(fill="x", padx=24, pady=(20, 10))
+        
+        nick_frame = ctk.CTkFrame(self, fg_color="transparent")
+        nick_frame.pack(fill="x", padx=24, pady=8)
+        
+        nick_label = ctk.CTkLabel(nick_frame, text="Nickname", font=parent.fonts["body_bold"], text_color=COLOR_TEXT_MUTED)
+        nick_label.pack(anchor="w", pady=(0, 4))
+        
+        self.nick_entry = ctk.CTkEntry(
+            nick_frame, fg_color=COLOR_FIELD_BG, border_color=COLOR_BORDER,
+            text_color=COLOR_TEXT_PRIMARY, placeholder_text="e.g. Primary Phone",
+            corner_radius=8, height=40, font=parent.fonts["body"]
+        )
+        self.nick_entry.pack(fill="x")
+        self.nick_entry.insert(0, device.get("nickname", ""))
+        
+        self.ip_entry = None
+        if device.get("type") == "wireless":
+            ip_frame = ctk.CTkFrame(self, fg_color="transparent")
+            ip_frame.pack(fill="x", padx=24, pady=8)
+            
+            ip_label = ctk.CTkLabel(ip_frame, text="IP Address", font=parent.fonts["body_bold"], text_color=COLOR_TEXT_MUTED)
+            ip_label.pack(anchor="w", pady=(0, 4))
+            
+            self.ip_entry = ctk.CTkEntry(
+                ip_frame, fg_color=COLOR_FIELD_BG, border_color=COLOR_BORDER,
+                text_color=COLOR_TEXT_PRIMARY, corner_radius=8, height=40, font=parent.fonts["body"]
+            )
+            self.ip_entry.pack(fill="x")
+            self.ip_entry.insert(0, device.get("ip", ""))
+            
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=24, pady=(20, 10), side="bottom")
+        
+        cancel_btn = ctk.CTkButton(
+            btn_frame, text="Cancel", width=100, height=38, command=self.destroy,
+            fg_color=COLOR_FIELD_BG, hover_color=COLOR_CARD_HOVER, border_color=COLOR_BORDER,
+            border_width=1, text_color=COLOR_TEXT_PRIMARY, corner_radius=8, font=parent.fonts["button"]
+        )
+        cancel_btn.pack(side="left", padx=(0, 10))
+        
+        save_btn = ctk.CTkButton(
+            btn_frame, text="Save Changes", height=38, command=self.save,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT_PRIMARY, corner_radius=8, font=parent.fonts["button"]
+        )
+        save_btn.pack(side="right", fill="x", expand=True)
+        
+        self.nick_entry.focus()
+
+
+# --- CUSTOM TITLE BAR ---
+class TitleBar(ctk.CTkFrame):
+    """
+    Custom macOS-style frameless window Title Bar.
+    Features red, yellow, and green window control circles on the far left,
+    and a centered application title.
+    Supports smooth dragging/repositioning.
+    """
+    def __init__(self, master, ctk_gui, title_text="Scrcpy Deck v4.0.0", **kwargs):
+        super().__init__(master, fg_color=COLOR_TITLE_BAR_BG, height=18, corner_radius=0, **kwargs)
+        self.pack_propagate(False)
+        self.ctk_gui = ctk_gui
+        self.root = ctk_gui.root
+        
+        self.drag_data = {"x": 0, "y": 0}
+        
+        # Right circular window control buttons container
+        self.controls_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.controls_frame.place(relx=1.0, rely=0.33, anchor="e", x=-16)
+        
+        # Window control colors (Windows order: Minimize, Maximize, Close)
+        self.btn_minimize = self.create_circle_button(self.controls_frame, "#FFBD2E", "#FFD066", self.on_minimize)
+        self.btn_minimize.pack(side="left", padx=4)
+        
+        self.btn_maximize = self.create_circle_button(self.controls_frame, "#27C93F", "#4AE260", self.on_maximize)
+        self.btn_maximize.pack(side="left", padx=4)
+        
+        self.btn_close = self.create_circle_button(self.controls_frame, "#FF5F56", "#FF7B72", self.on_close)
+        self.btn_close.pack(side="left", padx=4)
+        
+        # Title Label Centered
+        self.title_label = ctk.CTkLabel(
+            self,
+            text=title_text,
+            font=ctk.CTkFont(family=self.ctk_gui.font_family, size=11, weight="bold"),
+            text_color="#FFFFFF"
+        )
+        self.title_label.place(relx=0.5, rely=0.33, anchor="center")
+        
+        # Bind dragging & double-click maximize
+        self.bind("<Button-1>", self.start_drag)
+        self.bind("<B1-Motion>", self.drag_window)
+        self.bind("<Double-Button-1>", self.on_maximize)
+        
+        self.title_label.bind("<Button-1>", self.start_drag)
+        self.title_label.bind("<B1-Motion>", self.drag_window)
+        self.title_label.bind("<Double-Button-1>", self.on_maximize)
+
+    def create_smooth_circle_image(self, color, size=(12, 12), scale=4):
+        try:
+            from PIL import Image, ImageDraw
+        except ImportError:
+            return None
+        w, h = size
+        large_w, large_h = w * scale, h * scale
+        
+        img = Image.new("RGBA", (large_w, large_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        margin = scale // 2
+        draw.ellipse([margin, margin, large_w - margin, large_h - margin], fill=color)
+        
+        try:
+            resample_filter = Image.Resampling.LANCZOS
+        except AttributeError:
+            try:
+                resample_filter = Image.LANCZOS
+            except AttributeError:
+                resample_filter = Image.ANTIALIAS
+                
+        img_smooth = img.resize((w * 3, h * 3), resample=resample_filter)
+        return ctk.CTkImage(light_image=img_smooth, dark_image=img_smooth, size=size)
+
+    def create_circle_button(self, parent, color, hover_color, command):
+        img_normal = self.create_smooth_circle_image(color, (12, 12))
+        img_hover = self.create_smooth_circle_image(hover_color, (12, 12))
+        
+        if img_normal and img_hover:
+            label = ctk.CTkLabel(parent, text="", image=img_normal, width=12, height=12, fg_color="transparent", cursor="hand2")
+            label.image_normal = img_normal
+            label.image_hover = img_hover
+            
+            label.bind("<Button-1>", lambda event: command())
+            label.bind("<Enter>", lambda event: label.configure(image=label.image_hover))
+            label.bind("<Leave>", lambda event: label.configure(image=label.image_normal))
+            return label
+        else:
+            canvas = tk.Canvas(parent, width=12, height=12, bg=COLOR_TITLE_BAR_BG, highlightthickness=0, bd=0, cursor="hand2")
+            canvas.create_oval(1, 1, 11, 11, fill=color, outline="")
+            canvas.bind("<Button-1>", lambda event: command())
+            return canvas
+
+    def start_drag(self, event):
+        try:
+            from ctypes import windll
+            # Release mouse capture from Tkinter so Windows can take over dragging
+            windll.user32.ReleaseCapture()
+            
+            # Send WM_NCLBUTTONDOWN with HTCAPTION asynchronously to the parent window
+            # using PostMessageW to prevent GIL release and modal blocking crashes.
+            hwnd = windll.user32.GetParent(self.root.winfo_id())
+            WM_NCLBUTTONDOWN = 0x00A1
+            HTCAPTION = 2
+            windll.user32.PostMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0)
+        except Exception:
+            # Fallback to manual drag coordinates
+            self.drag_data["x"] = event.x
+            self.drag_data["y"] = event.y
+
+    def drag_window(self, event):
+        try:
+            # Fallback manual drag calculation (only runs if Windows drag didn't take over)
+            deltax = event.x - self.drag_data["x"]
+            deltay = event.y - self.drag_data["y"]
+            x = self.root.winfo_x() + deltax
+            y = self.root.winfo_y() + deltay
+            self.root.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+    def on_close(self):
+        self.root.destroy()
+
+    def on_minimize(self):
+        # Natively minimize standard window
+        self.root.state("iconic")
+
+    def on_maximize(self, event=None):
+        if self.root.state() == "zoomed":
+            self.root.state("normal")
+        else:
+            self.root.state("zoomed")
+
+
+    def save(self):
+        new_nick = self.nick_entry.get().strip()
+        new_ip = self.ip_entry.get().strip() if self.ip_entry else None
+        self.on_save(new_nick, new_ip)
+        self.destroy()
+
+
+# --- MAIN APPLICATION VIEW ---
 class ScrcpyGUI:
     def __init__(self, root):
         self.root = root
         self.root.title(f"{PROGRAM_TITLE} v{CURRENT_VERSION}")
-        self.root.geometry("1360x860")
-        self.root.minsize(1080, 680)
+        self.root.geometry("1200x700")
+        self.root.minsize(1050, 620)
+
+        # Window configuration (Standard window with custom captionless styling)
+        self.root.overrideredirect(False)
+        self.root.after(10, self.apply_frameless_style)
+
+        # Set strict premium dark mode
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
 
         if getattr(sys, 'frozen', False):
             self.script_dir = os.path.dirname(sys.executable)
@@ -80,27 +549,36 @@ class ScrcpyGUI:
         if not os.path.exists(self.adb_exe):
             self.adb_exe = "adb"
 
+        # Managers initialization
         self.asset_mgr = AssetManager(self.root, self.script_dir, self.assets_dir)
         self.console_mgr = ConsoleManager(self.append_console, self.script_dir)
         self.adb = AdbManager(self.adb_exe, self.script_dir, self.console_mgr)
 
+        # Thread-safe logging queue engine
+        self.log_queue = queue.Queue()
+        self.root.after(50, self._queue_polling_loop)
+
         self.init_theme()
 
-        # Variables
+        # Shared Configuration Variables Initialization
         config.init_config_vars(self)
         self.status_var = ctk.StringVar(value="Ready for a fresh mirror session.")
         self.connection_summary_var = ctk.StringVar(value="Waiting for your first device scan")
+        
         self.guidance_step_var = ctk.StringVar(value="Step 1 of 5")
         self.guidance_title_var = ctk.StringVar(value="Connect your phone by USB")
         self.guidance_detail_var = ctk.StringVar(value="Unlock the phone, allow USB debugging, then scan for devices.")
+        
         self.source_summary_var = ctk.StringVar()
         self.quality_summary_var = ctk.StringVar()
         self.audio_summary_var = ctk.StringVar()
         self.window_summary_var = ctk.StringVar()
         self.extras_summary_var = ctk.StringVar()
+        
         self.device_count_var = ctk.StringVar(value="0")
         self.source_metric_var = ctk.StringVar(value="Screen")
         self.source_metric_detail_var = ctk.StringVar(value="Software renderer")
+        
         self.recording_status_var = ctk.StringVar(value="Off")
         self.recording_detail_var = ctk.StringVar(value="MP4 capture idle")
         
@@ -118,7 +596,7 @@ class ScrcpyGUI:
         self.device_label_to_serial = {}
         self.device_serial_to_label = {}
         self.device_infos = []
-        
+
         config.load_config(self, self.config_file)
         self.attach_variable_traces()
         self.create_widgets()
@@ -127,24 +605,53 @@ class ScrcpyGUI:
         
         threading.Thread(target=self.check_for_updates, daemon=True).start()
 
+    def apply_frameless_style(self):
+        try:
+            from ctypes import windll
+            GWL_STYLE = -16
+            WS_CAPTION = 0x00C00000
+            WS_THICKFRAME = 0x00040000
+            
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOZORDER = 0x0004
+            
+            hwnd = windll.user32.GetParent(self.root.winfo_id())
+            style = windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            
+            # Remove title bar/caption borders but retain thick resizing border
+            new_style = (style & ~WS_CAPTION) | WS_THICKFRAME
+            windll.user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
+            
+            # Force the frame style change to take effect immediately
+            windll.user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+            )
+        except Exception:
+            pass
+
     def init_theme(self):
-        self.root.configure(fg_color=APP_BG)
-        self.root.configure(bg=APP_BG)
+        self.root.configure(fg_color=COLOR_WINDOW_BG)
+        self.root.configure(bg=COLOR_WINDOW_BG)
         self.load_local_fonts()
+        
         self.font_family = self.pick_font("Nunito", "Nunito Medium", "Segoe UI Variable Text", "Segoe UI", "Arial")
         self.font_title_family = self.pick_font("Quicksand", "Nunito ExtraBold", "Nunito Black", "Nunito", "Segoe UI Variable Display", self.font_family)
         self.font_metric_family = self.pick_font("Nunito Black", "Nunito ExtraBold", "Nunito", self.font_title_family)
         self.font_ui_accent_family = self.pick_font("Quicksand", "Nunito SemiBold", "Nunito", "Segoe UI Variable Text", self.font_family)
         self.font_caption_family = self.pick_font("Nunito Medium", "Nunito", self.font_family)
         self.font_mono_family = self.pick_font("Cascadia Code", "Consolas", "Courier New", self.font_family)
+        
         self.root.option_add("*Font", f"{{{self.font_family}}} 12")
         self.fonts = {
-            "hero": ctk.CTkFont(family=self.font_title_family, size=34, weight="bold"),
-            "title": ctk.CTkFont(family=self.font_title_family, size=26, weight="bold"),
-            "section": ctk.CTkFont(family=self.font_title_family, size=20, weight="bold"),
+            "hero": ctk.CTkFont(family=self.font_title_family, size=30, weight="bold"),
+            "title": ctk.CTkFont(family=self.font_title_family, size=24, weight="bold"),
+            "section": ctk.CTkFont(family=self.font_title_family, size=18, weight="bold"),
             "body": ctk.CTkFont(family=self.font_family, size=13),
             "body_bold": ctk.CTkFont(family=self.font_ui_accent_family, size=13, weight="bold"),
-            "metric": ctk.CTkFont(family=self.font_metric_family, size=28, weight="bold"),
+            "metric": ctk.CTkFont(family=self.font_metric_family, size=26, weight="bold"),
             "caption": ctk.CTkFont(family=self.font_caption_family, size=11),
             "caption_bold": ctk.CTkFont(family=self.font_ui_accent_family, size=11, weight="bold"),
             "console": ctk.CTkFont(family=self.font_mono_family, size=10),
@@ -205,7 +712,7 @@ class ScrcpyGUI:
             if color and color != "transparent":
                 return color
             current = getattr(current, "master", None)
-        return APP_BG
+        return COLOR_WINDOW_BG
 
     def create_logo_widget(self, parent, key, size=None):
         if self.asset_mgr.ctk_logo_images.get(key):
@@ -219,8 +726,8 @@ class ScrcpyGUI:
                 highlightthickness=0
             )
             return label
-        fallback_text = "SE" if size is None or size >= 40 else ""
-        return ctk.CTkLabel(parent, text=fallback_text, text_color=TEXT, font=self.fonts["button_large"])
+        fallback_text = "SD" if size is None or size >= 40 else ""
+        return ctk.CTkLabel(parent, text=fallback_text, text_color=COLOR_TEXT_PRIMARY, font=self.fonts["button_large"])
 
     def attach_variable_traces(self):
         for var_name, _, _ in config.CONFIG_FIELDS.values():
@@ -228,6 +735,7 @@ class ScrcpyGUI:
 
     def refresh_dashboard_state(self):
         config.save_config(self, self.config_file)
+        
         source_labels = {
             "screen": "Screen mirror",
             "camera_back": "Back camera",
@@ -236,6 +744,7 @@ class ScrcpyGUI:
         }
         source_label = source_labels.get(self.var_source.get(), "Screen mirror")
         self.source_summary_var.set(f"{source_label} | Renderer {self.renderer_combo_val.get()}")
+        
         self.source_metric_var.set({"screen": "Screen", "camera_back": "Back Cam", "camera_front": "Front Cam", "mic_only": "Mic Only"}.get(self.var_source.get(), "Screen"))
         self.source_metric_detail_var.set(f"{self.renderer_combo_val.get().title()} renderer")
 
@@ -248,44 +757,49 @@ class ScrcpyGUI:
 
         if self.var_source.get() in ("camera_back", "camera_front"):
             audio_label = "Audio muted for camera mode"
-        elif self.var_source.get() == "mic_only":
-            audio_label = f"Mic capture | {self.var_audio_codec.get().upper()}"
-        elif self.var_no_audio.get():
-            audio_label = "No audio"
         else:
-            audio_label = f"Phone audio | {self.var_audio_codec.get().upper()}"
+            audio_label = "Audio Muted" if self.var_no_audio.get() else f"Audio: {self.var_audio_codec.get().upper()}"
         self.audio_summary_var.set(audio_label)
 
-        window_flags = []
-        if self.var_fullscreen.get(): window_flags.append("Fullscreen")
-        if self.var_borderless.get(): window_flags.append("Borderless")
-        if self.var_always_on_top.get(): window_flags.append("Always on top")
-        if self.var_no_control.get(): window_flags.append("View only")
-        self.window_summary_var.set(", ".join(window_flags) if window_flags else "Standard interactive window")
+        orientation_labels = {
+            "Auto (Rotate with Phone)": "Rotate with Phone",
+            "Portrait (@0)": "Portrait (0°)",
+            "Landscape (@90)": "Landscape (90°)",
+            "Portrait Reversed (@180)": "Portrait Reversed (180°)",
+            "Landscape Reversed (@270)": "Landscape Reversed (270°)",
+        }
+        orient = orientation_labels.get(self.orientation_combo_val.get(), "Auto")
+        opts = []
+        if self.var_always_on_top.get(): opts.append("Top")
+        if self.var_borderless.get(): opts.append("Borderless")
+        if self.var_fullscreen.get(): opts.append("Fullscreen")
+        opts_label = f" | {', '.join(opts)}" if opts else ""
+        self.window_summary_var.set(f"{orient}{opts_label}")
 
-        extras = []
-        if self.var_record.get(): extras.append("MP4 recording armed")
-        if self.var_debug_mode.get(): extras.append("Debug console on")
-        if self.var_screen_off.get(): extras.append("Phone screen off")
-        if self.var_show_touches.get(): extras.append("Touch trail on")
-        self.extras_summary_var.set(" | ".join(extras) if extras else "Balanced preset with clean defaults")
-        self.recording_status_var.set("Armed" if self.var_record.get() else "Off")
-        self.recording_detail_var.set("MP4 on next launch" if self.var_record.get() else "MP4 capture idle")
+        behaviors = []
+        if self.var_stay_awake.get(): behaviors.append("Stay Awake")
+        if self.var_screen_off.get(): behaviors.append("Turn Screen Off")
+        if self.var_show_touches.get(): behaviors.append("Show Touches")
+        if self.var_no_control.get(): behaviors.append("Read-Only")
+        self.extras_summary_var.set(", ".join(behaviors) or "Standard behavior")
+
+        if self.var_record.get():
+            self.recording_status_var.set("Active")
+            self.recording_detail_var.set("Recording active next run")
+        else:
+            self.recording_status_var.set("Off")
+            self.recording_detail_var.set("MP4 capture idle")
+
         self.update_next_step_guidance()
 
     def set_status(self, message):
         self.status_var.set(message)
 
     def get_selected_device(self):
-        if not hasattr(self, "device_combo"): return ""
-        try: label = self.device_combo.get().strip()
-        except Exception: return ""
-        serial = getattr(self, "device_label_to_serial", {}).get(label)
-        if serial:
-            return serial
-        if label and label != "No devices found":
-            return label
-        return ""
+        label = self.device_combo.get()
+        if not label or label == "No devices found":
+            return ""
+        return self.device_label_to_serial.get(label, "")
 
     def set_workflow_issue(self, message, hint="", action=None, action_label="Review next step"):
         self.workflow_issue_message = message
@@ -302,12 +816,12 @@ class ScrcpyGUI:
         self.update_next_step_guidance()
 
     def run_guidance_action(self):
-        action = getattr(self, "workflow_guidance_action", None)
-        if callable(action): action()
+        if getattr(self, "workflow_guidance_action", None):
+            self.workflow_guidance_action()
 
     def run_guidance_action_2(self):
-        action = getattr(self, "workflow_guidance_action_2", None)
-        if callable(action): action()
+        if getattr(self, "workflow_guidance_action_2", None):
+            self.workflow_guidance_action_2()
 
     def update_next_step_guidance(self):
         serial = self.get_selected_device()
@@ -320,65 +834,79 @@ class ScrcpyGUI:
             detail = self.workflow_issue_message
             if self.workflow_issue_hint: detail = f"{detail}\n{self.workflow_issue_hint}"
             payload = {
-                "step": "Needs attention", "title": "Something went wrong", "detail": detail,
+                "step": "Attention Needed", "title": "Setup Warning", "detail": detail,
                 "action_label": self.workflow_issue_action_label or "Open Console",
-                "action": self.workflow_issue_action or (lambda: self.switch_tab("Console")),
+                "action": self.workflow_issue_action or (lambda: self.switch_tab("Terminal Console")),
             }
         elif not usb_ready:
             payload = {
-                "step": "Step 1", "title": "Plug in your phone!",
-                "detail": "Go to your phone settings, spam tap 'Build number' to unlock Developer Options, and turn on 'USB debugging'. Then plug it in and hit Scan.",
-                "action_label": "Scan devices", "action": self.refresh_devices,
+                "step": "Step 1 of 5", "title": "Plug in your Phone",
+                "detail": "1. Go to settings > About Phone.\n2. Spam tap 'Build number' to unlock Developer options.\n3. Turn on 'USB debugging' inside Developer options.\n4. Connect with a USB cable and scan.",
+                "action_label": "Scan for Devices", "action": self.refresh_devices,
             }
         elif not ip:
             payload = {
-                "step": "Step 2", "title": "Phone Detected!",
-                "detail": "Awesome! You can start mirroring over the cable right now, or keep going to set up wireless.",
-                "action_label": "Start USB Mirror", "action": self.start_scrcpy,
-                "action_2_label": "Continue Wireless", "action_2": self.get_device_ip,
+                "step": "Step 2 of 5", "title": "USB Link Active",
+                "detail": "Device detected over USB! You can start mirroring over the cable right now, or continue setting up Wi-Fi.",
+                "action_label": "Start Cable Mirror", "action": self.start_scrcpy,
+                "action_2_label": "Setup Wi-Fi IP", "action_2": self.get_device_ip,
             }
         elif not self.workflow_tcpip_enabled:
             payload = {
-                "step": "Step 3", "title": "Prep for Wireless",
-                "detail": "Click the button below to tell your phone it's okay to connect over Wi-Fi.",
+                "step": "Step 3 of 5", "title": "Configure Port 5555",
+                "detail": "Click Enable TCP/IP below. This instructs ADB on the phone to allow connections over the network.",
                 "action_label": "Enable TCP/IP", "action": self.enable_tcpip,
             }
         elif not wireless_ready:
             payload = {
-                "step": "Step 4", "title": "Connect Wi-Fi",
-                "detail": "Click Connect Wi-Fi. Once it says success, you can finally unplug the cable!",
+                "step": "Step 4 of 5", "title": "Connect Wirelessly",
+                "detail": "Disconnect your USB cable. Enter the IP address and click Connect Wi-Fi.",
                 "action_label": "Connect Wi-Fi", "action": self.connect_wireless,
             }
         else:
             payload = {
-                "step": "Step 5", "title": "All Set!",
-                "detail": "You are connected wirelessly. Click Start Mirroring to see your screen!",
-                "action_label": "Start Mirroring", "action": self.start_scrcpy,
+                "step": "Step 5 of 5", "title": "Wi-Fi Link Ready",
+                "detail": "Your phone is connected wirelessly over Wi-Fi! You can now launch mirroring.",
+                "action_label": "Start Wireless Mirror", "action": self.start_scrcpy,
             }
 
         self.guidance_step_var.set(payload["step"])
         self.guidance_title_var.set(payload["title"])
         self.guidance_detail_var.set(payload["detail"])
         self.workflow_guidance_action = payload["action"]
-        if hasattr(self, "guidance_button"):
-            self.guidance_button.configure(text=payload["action_label"], command=self.run_guidance_action, state="normal")
+        
+        if hasattr(self, "guidance_button") and self.guidance_button.winfo_exists():
+            self.guidance_button.configure(text=payload["action_label"], state="normal")
             if "action_2" in payload:
                 self.workflow_guidance_action_2 = payload["action_2"]
-                self.guidance_button_2.configure(text=payload["action_2_label"], command=self.run_guidance_action_2, state="normal")
+                self.guidance_button_2.configure(text=payload["action_2_label"], state="normal")
                 self.guidance_button_2.pack(fill="x", pady=(8, 0))
             else:
                 self.workflow_guidance_action_2 = None
-                if hasattr(self, "guidance_button_2"):
-                    self.guidance_button_2.pack_forget()
+                self.guidance_button_2.pack_forget()
+
+    # --- THREAD-SAFE NON-BLOCKING QUEUE POLLING ---
+    def _queue_polling_loop(self):
+        try:
+            while True:
+                line, level = self.log_queue.get_nowait()
+                self._append_console_ui(line, level)
+                self.log_queue.task_done()
+        except queue.Empty:
+            pass
+        self.root.after(50, self._queue_polling_loop)
 
     def append_console(self, line, level="OUT"):
-        if hasattr(self, "console_textbox") and self.console_textbox.winfo_exists():
-            self.root.after(0, lambda: self._append_console_ui(line, level))
+        self.log_queue.put((line, level))
 
     def _append_console_ui(self, line, level):
+        if not hasattr(self, "console_textbox") or not self.console_textbox.winfo_exists():
+            return
         self.console_textbox.configure(state="normal")
-        try: self.console_textbox.insert("end", line, level)
-        except Exception: self.console_textbox.insert("end", line)
+        try:
+            self.console_textbox.insert("end", line + "\n", level)
+        except Exception:
+            self.console_textbox.insert("end", line + "\n")
         self.console_textbox.see("end")
         self.console_textbox.configure(state="disabled")
 
@@ -430,83 +958,38 @@ class ScrcpyGUI:
         text_widget.yview_scroll(step, "units")
         return "break"
 
-    # UI Helpers
+
+    # --- COMPONENT STYLING HELPERS (For compatibility) ---
     def make_section_label(self, parent, title, subtitle=None):
-        ctk.CTkLabel(parent, text=title, font=self.fonts["section"], text_color=TEXT).pack(anchor="w")
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        ctk.CTkLabel(frame, text=title, font=self.fonts["section"], text_color=COLOR_TEXT_PRIMARY, anchor="w").pack(fill="x")
         if subtitle:
-            ctk.CTkLabel(parent, text=subtitle, font=self.fonts["body"], text_color=MUTED_TEXT).pack(anchor="w", pady=(4, 0))
+            ctk.CTkLabel(frame, text=subtitle, font=self.fonts["caption"], text_color=COLOR_TEXT_MUTED, anchor="w").pack(fill="x")
+        return frame
 
     def make_info_row(self, parent, label, value_var, accent=False):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=20, pady=6)
-        row.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(row, text=label, width=78, anchor="w", font=self.fonts["caption_bold"], text_color=MUTED_TEXT).grid(row=0, column=0, sticky="nw", padx=(0, 12))
-        ctk.CTkLabel(row, textvariable=value_var, font=self.fonts["body_bold"], text_color=ACCENT_ALT if accent else TEXT, justify="left", anchor="w", wraplength=195).grid(row=0, column=1, sticky="nw")
+        row.pack(fill="x", padx=20, pady=4)
+        ctk.CTkLabel(row, text=label, font=self.fonts["caption_bold"], text_color=COLOR_TEXT_MUTED).pack(side="left")
+        val_lbl = ctk.CTkLabel(row, textvariable=value_var, font=self.fonts["caption"], text_color=COLOR_ACCENT if accent else COLOR_TEXT_PRIMARY)
+        val_lbl.pack(side="right")
         return row
 
     def make_primary_button(self, parent, text, command, height=42):
-        return ctk.CTkButton(parent, text=text, command=command, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=TEXT, corner_radius=8, height=height, font=self.fonts["button"])
-
-    def make_sidebar_button(self, parent, text, command, active=False):
-        return ctk.CTkButton(parent, text=text, command=command, fg_color=CARD_BG if active else "transparent", hover_color=CARD_HOVER, border_color=BORDER, border_width=1 if active else 0, text_color=TEXT if active else MUTED_TEXT, corner_radius=8, height=42, anchor="w", font=self.fonts["button"])
-
-    def set_sidebar_button_state(self, button, active):
-        button.configure(fg_color=CARD_BG if active else "transparent", hover_color=CARD_HOVER, border_color=BORDER, border_width=1 if active else 0, text_color=TEXT if active else MUTED_TEXT)
-
-    def switch_tab(self, tab_name):
-        self.tabview.set(tab_name)
-        self.sync_sidebar_tab_state(tab_name)
-
-    def sync_sidebar_tab_state(self, active_tab=None, *_):
-        if not hasattr(self, "sidebar_nav_buttons"): return
-        active_tab = active_tab or self.tabview.get()
-        for tab_name, button in self.sidebar_nav_buttons.items():
-            self.set_sidebar_button_state(button, tab_name == active_tab)
-
-    def make_card(self, parent, title, subtitle=None, fg_color=CARD_BG, border_color=BORDER):
-        card = ctk.CTkFrame(parent, fg_color=fg_color, border_color=border_color, border_width=1, corner_radius=10)
-        title_label = ctk.CTkLabel(card, text=title, font=self.fonts["section"], text_color=TEXT, justify="left", anchor="w")
-        title_label.pack(fill="x", padx=20, pady=(18, 0))
-        if subtitle:
-            subtitle_label = ctk.CTkLabel(card, text=subtitle, font=self.fonts["body"], text_color=MUTED_TEXT, justify="left", anchor="w")
-            subtitle_label.pack(fill="x", padx=20, pady=(4, 10))
-            card.bind("<Configure>", lambda e, title_widget=title_label, subtitle_widget=subtitle_label: self.update_card_text_wrap(e.width, title_widget, subtitle_widget), add="+")
-        else:
-            card.bind("<Configure>", lambda e, title_widget=title_label: self.update_card_text_wrap(e.width, title_widget), add="+")
-        return card
-
-    def update_card_text_wrap(self, card_width, title_widget, subtitle_widget=None):
-        wrap = max(120, card_width - 40)
-        title_widget.configure(wraplength=wrap)
-        if subtitle_widget is not None: subtitle_widget.configure(wraplength=wrap)
-
-    def make_accordion_section(self, parent, title):
-        container = ctk.CTkFrame(parent, fg_color="transparent")
-        
-        header_var = ctk.StringVar(value=f"{title}  ▼")
-        btn = ctk.CTkButton(container, textvariable=header_var, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=6, height=36, font=self.fonts["button"], anchor="w")
-        btn.pack(fill="x", pady=4)
-        
-        inner_frame = ctk.CTkFrame(container, fg_color="transparent")
-        
-        def toggle():
-            if inner_frame.winfo_ismapped():
-                inner_frame.pack_forget()
-                header_var.set(f"{title}  ▼")
-            else:
-                inner_frame.pack(fill="x", padx=16, pady=(4, 8))
-                header_var.set(f"{title}  ▲")
-                
-        btn.configure(command=toggle)
-        return container, inner_frame
+        return ctk.CTkButton(
+            parent, text=text, height=height, command=command,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT_PRIMARY, font=self.fonts["button_large"],
+            corner_radius=12
+        )
 
     def make_action_button(self, parent, text, command, width=132, **kwargs):
         defaults = {
-            "fg_color": FIELD_BG,
-            "hover_color": CARD_HOVER,
-            "border_color": BORDER,
+            "fg_color": COLOR_FIELD_BG,
+            "hover_color": COLOR_CARD_HOVER,
+            "border_color": COLOR_BORDER,
             "border_width": 1,
-            "text_color": TEXT,
+            "text_color": COLOR_TEXT_PRIMARY,
             "corner_radius": 8,
             "font": self.fonts["button"]
         }
@@ -514,185 +997,681 @@ class ScrcpyGUI:
         return ctk.CTkButton(parent, text=text, width=width, height=38, command=command, **defaults)
 
     def make_input(self, parent, **kwargs):
-        return ctk.CTkEntry(parent, fg_color=FIELD_BG, border_color=BORDER, text_color=TEXT, placeholder_text_color=MUTED_TEXT, corner_radius=8, height=40, font=self.fonts["body"], **kwargs)
+        return ctk.CTkEntry(
+            parent, fg_color=COLOR_FIELD_BG, border_color=COLOR_BORDER,
+            text_color=COLOR_TEXT_PRIMARY, placeholder_text_color=COLOR_TEXT_MUTED,
+            corner_radius=8, height=40, font=self.fonts["body"], **kwargs
+        )
 
     def make_combo(self, parent, **kwargs):
-        return ctk.CTkComboBox(parent, fg_color=FIELD_BG, border_color=BORDER, button_color=ACCENT, button_hover_color=ACCENT_HOVER, text_color=TEXT, dropdown_fg_color=PANEL_BG, dropdown_hover_color=CARD_HOVER, dropdown_text_color=TEXT, corner_radius=8, height=40, font=self.fonts["body"], **kwargs)
+        return ctk.CTkComboBox(
+            parent, fg_color=COLOR_FIELD_BG, border_color=COLOR_BORDER,
+            button_color=COLOR_ACCENT, button_hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT_PRIMARY, dropdown_fg_color=COLOR_CARD_BG,
+            dropdown_hover_color=COLOR_CARD_HOVER, dropdown_text_color=COLOR_TEXT_PRIMARY,
+            corner_radius=8, height=40, font=self.fonts["body"], **kwargs
+        )
 
     def make_checkbox(self, parent, text, variable):
-        return ctk.CTkCheckBox(parent, text=text, variable=variable, fg_color=ACCENT, hover_color=ACCENT_HOVER, border_color=BORDER, text_color=TEXT, corner_radius=4, font=self.fonts["body"])
+        """Replaces checkboxes with modern switches matching design specification."""
+        return ctk.CTkSwitch(
+            parent, text=text, variable=variable,
+            progress_color=COLOR_ACCENT, fg_color=COLOR_BORDER,
+            text_color=COLOR_TEXT_PRIMARY, font=self.fonts["body"]
+        )
 
     def make_radio(self, parent, text, value):
-        return ctk.CTkRadioButton(parent, text=text, variable=self.var_source, value=value, fg_color=ACCENT, hover_color=ACCENT_HOVER, border_color=BORDER, text_color=TEXT, font=self.fonts["body"])
+        return ctk.CTkRadioButton(
+            parent, text=text, variable=self.var_source, value=value,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            border_color=COLOR_BORDER, text_color=COLOR_TEXT_PRIMARY, font=self.fonts["body"]
+        )
 
     def make_labeled_input_row(self, parent, label_text, variable, placeholder="", width=90, label_width=120, extra_text=""):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        ctk.CTkLabel(row, text=label_text, width=label_width, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
-        self.make_input(row, textvariable=variable, width=width, placeholder_text=placeholder).pack(side="left")
+        ctk.CTkLabel(row, text=label_text, width=label_width, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
+        self.make_input(row, textvariable=variable, placeholder_text=placeholder, width=width).pack(side="left")
         if extra_text:
-            ctk.CTkLabel(row, text=extra_text, text_color=MUTED_TEXT, font=self.fonts["caption"]).pack(side="left", padx=(12, 0))
+            ctk.CTkLabel(row, text=extra_text, text_color=COLOR_TEXT_MUTED, font=self.fonts["caption"]).pack(side="left", padx=10)
         return row
 
     def make_labeled_combo_row(self, parent, label_text, variable, values, width=110, label_width=110):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        ctk.CTkLabel(row, text=label_text, width=label_width, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
+        ctk.CTkLabel(row, text=label_text, width=label_width, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
         self.make_combo(row, variable=variable, values=values, width=width).pack(side="left")
         return row
 
     def make_checkbox_group(self, parent, checks_list):
-        for i, (text, var) in enumerate(checks_list):
-            if i % 2 == 0:
-                row = ctk.CTkFrame(parent, fg_color="transparent")
-                row.pack(fill="x", pady=(8 if i == 0 else 4))
-                row.grid_columnconfigure((0, 1), weight=1)
-            self.make_checkbox(row, text, var).grid(row=0, column=i % 2, sticky="w", padx=4, pady=4)
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        for text, var in checks_list:
+            self.make_checkbox(frame, text, var).pack(anchor="w", pady=4)
+        return frame
 
+    def make_card(self, parent, title, subtitle=None, fg_color=COLOR_CARD_BG, border_color=COLOR_BORDER):
+        card = DashboardCard(parent, title=title, subtitle=subtitle, fg_color=fg_color, border_color=border_color)
+        return card
+
+    # --- REACTIVE INTERACTIVE SLIDER CREATOR ---
+    def make_labeled_slider(self, parent, label_text, variable, from_, to, value_formatter=None):
+        """
+        Creates a custom labeled slider with bidirectional data binding:
+        Dragging updates variable, and updating variable snaps slider.
+        """
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        
+        header = ctk.CTkFrame(frame, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 4))
+        
+        lbl = ctk.CTkLabel(header, text=label_text, font=self.fonts["body_bold"], text_color=COLOR_TEXT_MUTED)
+        lbl.pack(side="left")
+        
+        val_lbl = ctk.CTkLabel(header, text="", font=self.fonts["body_bold"], text_color=COLOR_ACCENT)
+        val_lbl.pack(side="right")
+        
+        def on_slider_move(val):
+            val_int = int(val)
+            variable.set(str(val_int))
+            disp = value_formatter(val_int) if value_formatter else str(val_int)
+            val_lbl.configure(text=disp)
+            self.refresh_dashboard_state()
+            
+        try:
+            curr_val = int(variable.get().strip() or "0")
+        except ValueError:
+            curr_val = 0
+            
+        slider = ctk.CTkSlider(
+            frame, from_=from_, to=to, number_of_steps=to - from_,
+            button_color=COLOR_ACCENT, button_hover_color=COLOR_ACCENT_HOVER,
+            progress_color=COLOR_ACCENT, fg_color=COLOR_BORDER,
+            command=on_slider_move
+        )
+        slider.set(curr_val)
+        slider.pack(fill="x", pady=2)
+        
+        disp = value_formatter(curr_val) if value_formatter else str(curr_val)
+        val_lbl.configure(text=disp)
+        
+        def on_var_write(*args):
+            try:
+                new_val = int(variable.get().strip() or "0")
+                slider.set(new_val)
+                disp_val = value_formatter(new_val) if value_formatter else str(new_val)
+                val_lbl.configure(text=disp_val)
+            except Exception:
+                pass
+                
+        variable.trace_add("write", on_var_write)
+        return frame
+
+
+    # --- MAIN VIEW SHELL CONSTRUCTION ---
     def create_widgets(self):
-        shell = ctk.CTkFrame(self.root, fg_color=SHELL_BG, border_color=BORDER, border_width=1, corner_radius=12)
-        shell.pack(fill="both", expand=True, padx=12, pady=12)
+        # Custom macOS-style Title Bar
+        self.title_bar = TitleBar(self.root, self, title_text=f"Scrcpy Deck v{CURRENT_VERSION}")
+        self.title_bar.pack(fill="x", side="top")
+
+        # Shell container grid
+        shell = ctk.CTkFrame(self.root, fg_color=COLOR_WINDOW_BG)
+        shell.pack(fill="both", expand=True)
         shell.grid_rowconfigure(0, weight=1)
+        shell.grid_rowconfigure(1, weight=0)  # Status Bar
         shell.grid_columnconfigure(1, weight=1)
 
-        sidebar = ctk.CTkFrame(shell, width=120, fg_color=SIDEBAR_BG, corner_radius=12)
-        sidebar.grid(row=0, column=0, sticky="ns", padx=(12, 10), pady=12)
+        # Left Sidebar Frame (Spotify playlist style - narrow width and scrollable list)
+        sidebar = ctk.CTkFrame(shell, width=190, fg_color=COLOR_SIDEBAR_BG, corner_radius=0, border_color=COLOR_BORDER, border_width=0)
+        sidebar.grid(row=0, column=0, rowspan=2, sticky="ns")
         sidebar.grid_propagate(False)
 
+        # Brand / Logo inside Sidebar (Compact horizontal layout)
         brand = ctk.CTkFrame(sidebar, fg_color="transparent")
-        brand.pack(fill="x", padx=18, pady=(24, 18))
-        badge = ctk.CTkFrame(brand, fg_color="transparent")
-        badge.pack(anchor="w", pady=(0, 4))
-        badge_label = self.create_logo_widget(badge, "badge", size=60)
-        badge_label.pack(anchor="w")
-        ctk.CTkLabel(brand, text="Scrcpy Deck", font=self.fonts["section"], text_color=TEXT).pack(anchor="w", pady=(14, 2))
-        ctk.CTkLabel(brand, text="Mirror faster", font=self.fonts["caption"], text_color=MUTED_TEXT).pack(anchor="w")
+        brand.pack(fill="x", padx=16, pady=(16, 8))
+        badge_label = self.create_logo_widget(brand, "header", size=24)
+        badge_label.pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(brand, text="Scrcpy Deck", font=self.fonts["section"], text_color=COLOR_TEXT_PRIMARY).pack(side="left")
 
-        nav = ctk.CTkFrame(sidebar, fg_color="transparent")
-        nav.pack(fill="x", padx=14, pady=(10, 0))
+        # Sidebar Menu items container (Spotify Playlist style - no scrollbar)
+        self.sidebar_nav_scroll = ctk.CTkFrame(sidebar, fg_color="transparent", corner_radius=0, border_width=0)
+        self.sidebar_nav_scroll.pack(fill="both", expand=True, padx=4, pady=(10, 10))
+
         self.sidebar_nav_buttons = {}
-        for tab in ["Connection", "Saved Devices", "Video & Audio", "Advanced", "Console", "Tutorials"]:
-            btn = self.make_sidebar_button(nav, tab, lambda t=tab: self.switch_tab(t), active=(tab=="Connection"))
-            btn.pack(fill="x", pady=4)
-            self.sidebar_nav_buttons[tab] = btn
+        tab_mappings = [
+            ("Quick Connect", "connection"),
+            ("Saved Devices", "devices"),
+            ("Display & Quality", "display"),
+            ("Advanced Controls", "advanced"),
+            ("Terminal Console", "console"),
+            ("Guidance & Help", "help")
+        ]
+        for tab_name, icon_name in tab_mappings:
+            btn = SidebarNavItem(self.sidebar_nav_scroll, tab_name, icon_name, lambda t=tab_name: self.switch_tab(t), self)
+            btn.pack(fill="x", pady=0)
+            self.sidebar_nav_buttons[tab_name] = btn
 
+        # Sidebar footer (Compact, single-line)
         sidebar_footer = ctk.CTkFrame(sidebar, fg_color="transparent")
-        sidebar_footer.pack(side="bottom", fill="x", padx=18, pady=18)
-        ctk.CTkLabel(sidebar_footer, text=f"v{CURRENT_VERSION}", font=self.fonts["caption"], text_color=MUTED_TEXT).pack(anchor="w")
-        ctk.CTkLabel(sidebar_footer, text="by EXPOSUREEE", font=self.fonts["caption"], text_color=MUTED_TEXT).pack(anchor="w", pady=(2, 0))
+        sidebar_footer.pack(side="bottom", fill="x", padx=16, pady=10)
+        ctk.CTkLabel(sidebar_footer, text=f"v{CURRENT_VERSION} · by EXPOSUREEE", font=self.fonts["caption"], text_color=COLOR_TEXT_MUTED).pack(anchor="w")
 
-        center = ctk.CTkFrame(shell, fg_color="transparent")
-        center.grid(row=0, column=1, sticky="nsew", pady=12)
-        center.grid_columnconfigure(0, weight=1)
+        # Main Workspace Panel
+        workspace = ctk.CTkFrame(shell, fg_color="transparent")
+        workspace.grid(row=0, column=1, sticky="nsew", padx=20, pady=(20, 10))
 
-        right_rail = ctk.CTkFrame(shell, width=340, fg_color=PANEL_BG, corner_radius=12)
-        right_rail.grid(row=0, column=2, sticky="ns", padx=(10, 12), pady=12)
-        right_rail.grid_propagate(False)
-        right_rail_content = ctk.CTkScrollableFrame(right_rail, width=308, fg_color="transparent", corner_radius=0)
-        right_rail_content.pack(fill="both", expand=True, padx=0, pady=0)
-
-        workspace = ctk.CTkFrame(center, fg_color=PANEL_BG, border_color=BORDER, border_width=1, corner_radius=12)
-        workspace.pack(fill="both", expand=True)
-
-        workspace_header = ctk.CTkFrame(workspace, fg_color="transparent")
-        workspace_header.pack(fill="x", padx=24, pady=(20, 8))
-        header_copy = ctk.CTkFrame(workspace_header, fg_color="transparent")
-        header_copy.pack(side="left", fill="x", expand=True)
-        header_logo = self.create_logo_widget(header_copy, "header", size=24)
-        header_logo.pack(anchor="w", pady=(0, 6))
-        self.make_section_label(header_copy, "Control Workspace", "Everything below is still functional, just easier to scan and operate.")
-        header_actions = ctk.CTkFrame(workspace_header, fg_color="transparent")
-        header_actions.pack(side="right")
-        self.btn_start = self.make_primary_button(header_actions, "Start Mirroring", self.start_scrcpy, height=42)
-        self.btn_start.pack(side="left")
-
-        self.tabview = ctk.CTkTabview(workspace, fg_color=PANEL_BG, segmented_button_fg_color=FIELD_BG, segmented_button_selected_color=ACCENT, segmented_button_selected_hover_color=ACCENT_HOVER, segmented_button_unselected_color=FIELD_BG, segmented_button_unselected_hover_color=CARD_HOVER, text_color=TEXT, corner_radius=12, border_width=0, command=self.sync_sidebar_tab_state)
-        self.tabview.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        for tab in ["Connection", "Saved Devices", "Video & Audio", "Advanced", "Console", "Tutorials"]: self.tabview.add(tab)
-
-        self.build_connection_tab(self.tabview.tab("Connection"))
-        self.build_saved_devices_tab(self.tabview.tab("Saved Devices"))
-        self.build_video_tab(self.tabview.tab("Video & Audio"))
-        self.build_advanced_tab(self.tabview.tab("Advanced"))
-        self.build_console_tab(self.tabview.tab("Console"))
-        self.build_tutorials_tab(self.tabview.tab("Tutorials"))
-        self.sync_sidebar_tab_state("Connection")
-        self.build_right_rail(right_rail_content)
-
-    def build_tutorials_tab(self, parent):
-        import webbrowser
+        # Header Area
+        header_bar = ctk.CTkFrame(workspace, fg_color="transparent")
+        header_bar.pack(fill="x", pady=(0, 16))
         
-        nav_var = ctk.StringVar(value="USB Debugging")
-        self.tutorial_nav_var = nav_var
-        self.tutorial_nav_segmented = ctk.CTkSegmentedButton(
-            parent, 
-            values=["USB Debugging", "Docs", "Videos", "faQs"], 
-            variable=self.tutorial_nav_var,
-            font=self.fonts["body_bold"],
-            fg_color=FIELD_BG, 
-            selected_color=ACCENT, 
-            selected_hover_color=ACCENT_HOVER, 
-            unselected_color=FIELD_BG, 
-            unselected_hover_color=CARD_HOVER
+        header_text = ctk.CTkFrame(header_bar, fg_color="transparent")
+        header_text.pack(side="left", fill="both", expand=True)
+        
+        self.page_title_label = ctk.CTkLabel(header_text, text="Quick Connect", font=self.fonts["title"], text_color=COLOR_TEXT_PRIMARY, anchor="w")
+        self.page_title_label.pack(anchor="w")
+        
+        self.page_subtitle_label = ctk.CTkLabel(header_text, text="Connect Android devices wirelessly or over USB.", font=self.fonts["caption"], text_color=COLOR_TEXT_MUTED, anchor="w")
+        self.page_subtitle_label.pack(anchor="w", pady=(2, 0))
+
+        header_actions = ctk.CTkFrame(header_bar, fg_color="transparent")
+        header_actions.pack(side="right", fill="y", anchor="e")
+        
+        self.btn_start = self.make_primary_button(header_actions, "▶  Start Mirroring", self.start_scrcpy)
+        self.btn_start.pack(side="right", padx=(10, 0))
+
+        # Page Frames Container
+        self.body_container = ctk.CTkFrame(workspace, fg_color="transparent")
+        self.body_container.pack(fill="both", expand=True)
+
+        self.tab_frames = {}
+        for tab_name, _ in tab_mappings:
+            frame = ctk.CTkFrame(self.body_container, fg_color="transparent")
+            self.tab_frames[tab_name] = frame
+
+        # Build each tab layout
+        self.build_quick_connect_tab(self.tab_frames["Quick Connect"])
+        self.build_saved_devices_tab(self.tab_frames["Saved Devices"])
+        self.build_display_quality_tab(self.tab_frames["Display & Quality"])
+        self.build_advanced_controls_tab(self.tab_frames["Advanced Controls"])
+        self.build_terminal_console_tab(self.tab_frames["Terminal Console"])
+        self.build_guidance_help_tab(self.tab_frames["Guidance & Help"])
+
+        # Default Active Tab
+        self.switch_tab("Quick Connect")
+
+        # Bottom Status Bar
+        status_bar = ctk.CTkFrame(shell, height=36, fg_color=COLOR_SIDEBAR_BG, border_color=COLOR_BORDER, border_width=1)
+        status_bar.grid(row=1, column=1, sticky="ew")
+        status_bar.grid_propagate(False)
+
+        # Status Led Point & Label
+        self.status_led = ctk.CTkFrame(status_bar, width=10, height=10, corner_radius=5, fg_color=COLOR_DANGER)
+        self.status_led.pack(side="left", padx=(16, 6))
+        
+        status_lbl = ctk.CTkLabel(status_bar, textvariable=self.status_var, font=self.fonts["caption_bold"], text_color=COLOR_TEXT_PRIMARY)
+        status_lbl.pack(side="left")
+
+        # Session Metrics Preview
+        session_lbl = ctk.CTkLabel(status_bar, textvariable=self.connection_summary_var, font=self.fonts["caption"], text_color=COLOR_TEXT_MUTED)
+        session_lbl.pack(side="right", padx=16)
+
+    def switch_tab(self, tab_name):
+        old_to_new = {
+            "Connection": "Quick Connect",
+            "Saved Devices": "Saved Devices",
+            "Video & Audio": "Display & Quality",
+            "Advanced": "Advanced Controls",
+            "Console": "Terminal Console",
+            "Tutorials": "Guidance & Help"
+        }
+        tab_name = old_to_new.get(tab_name, tab_name)
+
+        for frame in self.tab_frames.values():
+            frame.pack_forget()
+        
+        if tab_name in self.tab_frames:
+            self.tab_frames[tab_name].pack(fill="both", expand=True)
+
+        for name, item in self.sidebar_nav_buttons.items():
+            item.set_active(name == tab_name)
+
+        self.page_title_label.configure(text=tab_name)
+        
+        subtitles = {
+            "Quick Connect": "Scan, pair, and connect Android devices over USB or Wi-Fi.",
+            "Saved Devices": "Manage and reconnect to previously connected wireless devices.",
+            "Display & Quality": "Configure stream bitrate, frame limit, resolution, and codecs.",
+            "Advanced Controls": "Control screen state, window properties, and camera options.",
+            "Terminal Console": "Execute ADB terminal commands and monitor raw system outputs.",
+            "Guidance & Help": "View setup guides, troubleshooting steps, and documentation."
+        }
+        self.page_subtitle_label.configure(text=subtitles.get(tab_name, "Configure your mirroring session."))
+
+
+    # --- TAB PAGE 1: QUICK CONNECT ---
+    def build_quick_connect_tab(self, parent):
+        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        canvas.pack(fill="both", expand=True)
+
+        # Double column layout
+        grid_frame = ctk.CTkFrame(canvas, fg_color="transparent")
+        grid_frame.pack(fill="both", expand=True)
+        grid_frame.grid_columnconfigure(0, weight=3) # Left column (USB & Wireless Setup)
+        grid_frame.grid_columnconfigure(1, weight=2) # Right column (Readouts & Help)
+
+        col1 = ctk.CTkFrame(grid_frame, fg_color="transparent")
+        col1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+
+        col2 = ctk.CTkFrame(grid_frame, fg_color="transparent")
+        col2.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+
+        # LEFT COLUMN CARDS
+        # Card 1: USB Devices Selector
+        usb_card = self.make_card(col1, "Active Devices", "Select a connected USB or Wireless ADB target.")
+        usb_card.pack(fill="x", pady=(0, 16))
+        
+        inner_usb = ctk.CTkFrame(usb_card, fg_color="transparent")
+        inner_usb.pack(fill="x", padx=20, pady=(10, 20))
+        
+        self.device_combo = self.make_combo(inner_usb, values=[], command=lambda _: self.refresh_dashboard_state())
+        self.device_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        self.make_action_button(inner_usb, "Scan Devices", self.refresh_devices, width=110).pack(side="left")
+
+        # Card 2: Wireless Mode Setup
+        wireless_card = self.make_card(col1, "Wireless ADB (Wi-Fi)", "Pair and connect wirelessly over the local network.")
+        wireless_card.pack(fill="x")
+
+        self.wireless_method_var = ctk.StringVar(value="USB Assisted")
+        self.wireless_method_segmented = ctk.CTkSegmentedButton(
+            wireless_card, values=["USB Assisted", "Direct Pairing (Android 11+)"],
+            variable=self.wireless_method_var, font=self.fonts["body_bold"],
+            fg_color=COLOR_FIELD_BG, selected_color=COLOR_ACCENT,
+            selected_hover_color=COLOR_ACCENT_HOVER, unselected_color=COLOR_FIELD_BG,
+            unselected_hover_color=COLOR_CARD_HOVER, command=self.toggle_wireless_method
         )
-        self.tutorial_nav_segmented.pack(fill="x", padx=24, pady=(10, 0))
+        self.wireless_method_segmented.pack(fill="x", padx=20, pady=(10, 12))
 
+        # Container with fixed height to prevent card resize stutters
+        self.wireless_content_container = ctk.CTkFrame(wireless_card, fg_color="transparent", height=165)
+        self.wireless_content_container.pack(fill="x", padx=0, pady=0)
+        self.wireless_content_container.pack_propagate(False)
+
+        # USB Assisted wireless frame
+        self.usb_wireless_frame = ctk.CTkFrame(self.wireless_content_container, fg_color="transparent")
+        self.usb_wireless_frame.pack(side="top", fill="x")
+        
+        r_ip = ctk.CTkFrame(self.usb_wireless_frame, fg_color="transparent")
+        r_ip.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(r_ip, text="Device IP", width=80, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_ip, textvariable=self.var_ip, placeholder_text="192.168.1.15").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.make_action_button(r_ip, "Auto get IP", self.get_device_ip, width=100).pack(side="right")
+
+        r_wbtn = ctk.CTkFrame(self.usb_wireless_frame, fg_color="transparent")
+        r_wbtn.pack(fill="x", padx=20, pady=(0, 20))
+        self.make_action_button(r_wbtn, "Enable TCP/IP Mode", self.enable_tcpip, width=150).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.make_action_button(r_wbtn, "Connect Wirelessly", self.connect_wireless, width=150).pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+        # Direct wireless pairing frame
+        self.direct_wireless_frame = ctk.CTkFrame(self.wireless_content_container, fg_color="transparent")
+
+        r_direct_ip = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
+        r_direct_ip.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(r_direct_ip, text="Device IP", width=80, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_ip, textvariable=self.var_ip, placeholder_text="192.168.1.15").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        ctk.CTkLabel(r_direct_ip, text="Pair Port", width=60, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_ip, textvariable=self.var_pair_port, placeholder_text="37283", width=70).pack(side="left", padx=(10, 0))
+        
+        r_direct_code = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
+        r_direct_code.pack(fill="x", padx=20, pady=(0, 10))
+        ctk.CTkLabel(r_direct_code, text="Pair Code", width=80, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_code, textvariable=self.var_pair_code, placeholder_text="123456").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.make_action_button(r_direct_code, "Pair Device", self.pair_wireless, width=100).pack(side="right")
+        
+        r_direct_connect = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
+        r_direct_connect.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkLabel(r_direct_connect, text="Connect Port", width=80, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body"]).pack(side="left")
+        self.make_input(r_direct_connect, textvariable=self.var_connect_port, placeholder_text="42911").pack(side="left", fill="x", expand=True, padx=(10, 10))
+        self.make_action_button(r_direct_connect, "Auto-detect", self.auto_detect_port, width=100).pack(side="left")
+        self.make_action_button(r_direct_connect, "Connect", self.connect_wireless_direct, width=100, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER).pack(side="right", padx=(10, 0))
+
+        # RIGHT COLUMN CARDS
+        # Card 1: Session Stats / Readouts
+        stats_card = self.make_card(col2, "Session Readouts", "Live updates on current configurations.")
+        stats_card.pack(fill="x", pady=(0, 16))
+        
+        self.make_info_row(stats_card, "ADB Connection", self.connection_summary_var, accent=True)
+        self.make_info_row(stats_card, "Source Format", self.source_summary_var)
+        self.make_info_row(stats_card, "Stream Quality", self.quality_summary_var)
+        self.make_info_row(stats_card, "Audio Settings", self.audio_summary_var)
+        self.make_info_row(stats_card, "Window Mode", self.window_summary_var)
+        self.make_info_row(stats_card, "Recording Capture", self.recording_detail_var)
+        ctk.CTkLabel(stats_card, text="", height=4).pack()
+
+        # Card 2: Interactive Next-Step Guidance
+        self.guidance_card = self.make_card(col2, "Interactive Setup Guide", "Step-by-step assistant for new mirroring sessions.")
+        self.guidance_card.configure(border_color=COLOR_ACCENT, border_width=1.5)
+        self.guidance_card.pack(fill="x", pady=(0, 16))
+        
+        ctk.CTkLabel(self.guidance_card, textvariable=self.guidance_step_var, font=self.fonts["caption_bold"], text_color=COLOR_ACCENT_HOVER, justify="left", anchor="w").pack(fill="x", padx=20, pady=(4, 2))
+        ctk.CTkLabel(self.guidance_card, textvariable=self.guidance_title_var, font=self.fonts["body_bold"], text_color=COLOR_TEXT_PRIMARY, justify="left", anchor="w").pack(fill="x", padx=20, pady=(0, 6))
+        ctk.CTkLabel(self.guidance_card, textvariable=self.guidance_detail_var, font=self.fonts["body"], text_color=COLOR_TEXT_MUTED, justify="left", anchor="w", wraplength=340).pack(fill="x", padx=20, pady=(0, 14))
+        
+        self.guidance_action_frame = ctk.CTkFrame(self.guidance_card, fg_color="transparent")
+        self.guidance_action_frame.pack(fill="x", padx=20, pady=(0, 18))
+        
+        self.guidance_button = self.make_primary_button(self.guidance_action_frame, "Scan Devices", self.run_guidance_action, height=40)
+        self.guidance_button.pack(fill="x")
+        
+        self.guidance_button_2 = self.make_action_button(self.guidance_action_frame, "Secondary Action", self.run_guidance_action_2)
+        self.guidance_button_2.pack(fill="x", pady=(8, 0))
+        self.guidance_button_2.pack_forget()
+
+        # Card 3: Quick Utilities panel
+        utils_card = self.make_card(col2, "ADB Controls", "Quick utility commands for host configuration.")
+        utils_card.pack(fill="x")
+        
+        grid_utils = ctk.CTkFrame(utils_card, fg_color="transparent")
+        grid_utils.pack(fill="x", padx=20, pady=(8, 20))
+        grid_utils.grid_columnconfigure((0, 1), weight=1)
+        
+        self.make_action_button(grid_utils, "Kill ADB Server", self.kill_adb_server, width=120).grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.make_action_button(grid_utils, "Reset Connections", self.reset_device_connection, width=120).grid(row=0, column=1, sticky="ew", padx=(6, 0), pady=6)
+        self.make_action_button(grid_utils, "Project Page", self.open_download, width=120).grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=6)
+        self.make_action_button(grid_utils, "Support Creator", self.donate_upi, width=120, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
+
+    def toggle_wireless_method(self, method):
+        if method == "USB Assisted":
+            if hasattr(self, "direct_wireless_frame"):
+                self.direct_wireless_frame.pack_forget()
+            if hasattr(self, "usb_wireless_frame"):
+                self.usb_wireless_frame.pack(side="top", fill="x")
+        else:
+            if hasattr(self, "usb_wireless_frame"):
+                self.usb_wireless_frame.pack_forget()
+            if hasattr(self, "direct_wireless_frame"):
+                self.direct_wireless_frame.pack(side="top", fill="x")
+
+
+    # --- TAB PAGE 2: SAVED DEVICES ---
+    def build_saved_devices_tab(self, parent):
+        self.saved_devices_scroll_frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        self.saved_devices_scroll_frame.pack(fill="both", expand=True)
+        self.refresh_saved_devices_ui()
+
+    def refresh_saved_devices_ui(self):
+        if not hasattr(self, "saved_devices_scroll_frame"):
+            return
+            
+        for widget in self.saved_devices_scroll_frame.winfo_children():
+            widget.destroy()
+            
+        if not getattr(self, "saved_devices", []):
+            empty_card = self.make_card(
+                self.saved_devices_scroll_frame, "No Saved Devices Yet",
+                "Your paired devices will automatically save here once connected wirelessly or over USB."
+            )
+            empty_card.pack(fill="x", pady=10)
+            return
+            
+        for dev in self.saved_devices:
+            dev_type = dev.get("type", "usb")
+            icon_char = "🔌" if dev_type == "usb" else "📶"
+            nickname = dev.get("nickname", "")
+            brand = dev.get("brand", "")
+            model = dev.get("model", "")
+            serial = dev.get("serial", "")
+            ip = dev.get("ip", "")
+            
+            title = nickname if nickname else f"{brand} {model}".strip() or "Android Device"
+            subtitle = f"{brand} {model}".strip() if nickname else ""
+            
+            card = ctk.CTkFrame(self.saved_devices_scroll_frame, fg_color=COLOR_CARD_BG, border_color=COLOR_BORDER, border_width=1, corner_radius=12)
+            card.pack(fill="x", pady=6)
+            
+            left_frame = ctk.CTkFrame(card, fg_color="transparent")
+            left_frame.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+            
+            icon_lbl = ctk.CTkLabel(left_frame, text=icon_char, font=self.fonts["section"], width=32)
+            icon_lbl.pack(side="left", padx=(0, 12))
+            
+            info_subframe = ctk.CTkFrame(left_frame, fg_color="transparent")
+            info_subframe.pack(side="left", fill="y", expand=True)
+            
+            title_lbl = ctk.CTkLabel(info_subframe, text=title, font=self.fonts["body_bold"], text_color=COLOR_TEXT_PRIMARY, anchor="w")
+            title_lbl.pack(anchor="w")
+            
+            sub_lbl_text = ""
+            if dev_type == "wireless":
+                sub_lbl_text = f"IP: {ip}"
+                if subtitle: sub_lbl_text = f"{subtitle} • IP: {ip}"
+            else:
+                sub_lbl_text = f"USB Serial: {serial}"
+                if subtitle: sub_lbl_text = f"{subtitle} • Serial: {serial}"
+                    
+            sub_lbl = ctk.CTkLabel(info_subframe, text=sub_lbl_text, font=self.fonts["caption"], text_color=COLOR_TEXT_MUTED, anchor="w")
+            sub_lbl.pack(anchor="w", pady=(2, 0))
+            
+            right_frame = ctk.CTkFrame(card, fg_color="transparent")
+            right_frame.pack(side="right", padx=16, pady=12)
+            
+            remove_btn = self.make_action_button(right_frame, "❌", lambda d=dev: self.remove_saved_device(d), width=40, fg_color="#bf3b3b", hover_color="#9e2e2e")
+            remove_btn.pack(side="right", padx=(8, 0))
+            
+            edit_btn = self.make_action_button(right_frame, "✏️ Edit", lambda d=dev: self.edit_saved_device(d), width=70)
+            edit_btn.pack(side="right", padx=(8, 0))
+            
+            connect_btn = self.make_action_button(right_frame, "⚡ Connect", lambda d=dev: self.connect_saved_device(d), width=100, fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER)
+            connect_btn.pack(side="right")
+
+
+    # --- TAB PAGE 3: DISPLAY & QUALITY ---
+    def build_display_quality_tab(self, parent):
+        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        canvas.pack(fill="both", expand=True)
+
+        # Card 1: Sliders for Bitrate, FPS, Max Resolution
+        slider_card = self.make_card(canvas, "Quality Sliders", "Set limits for video stream output bandwidth and frame rates.")
+        slider_card.pack(fill="x", pady=(0, 16))
+        
+        inner_sliders = ctk.CTkFrame(slider_card, fg_color="transparent")
+        inner_sliders.pack(fill="x", padx=20, pady=(10, 20))
+        
+        self.make_labeled_slider(inner_sliders, "Stream Bitrate", self.var_bitrate, 1, 64, lambda v: f"{v} Mbps").pack(fill="x", pady=8)
+        self.make_labeled_slider(inner_sliders, "Max FPS Limit", self.var_max_fps, 0, 120, lambda v: "Auto" if v == 0 else f"{v} FPS").pack(fill="x", pady=8)
+        self.make_labeled_slider(inner_sliders, "Max Resolution Size", self.var_max_size, 0, 2560, lambda v: "Native Size" if v == 0 else f"{v}px").pack(fill="x", pady=8)
+
+        # Card 2: Codecs and Renderer Selection
+        codecs_card = self.make_card(canvas, "Codecs & Rendering", "Select system render driver and encoding formats.")
+        codecs_card.pack(fill="x", pady=(0, 16))
+        
+        inner_codecs = ctk.CTkFrame(codecs_card, fg_color="transparent")
+        inner_codecs.pack(fill="x", padx=20, pady=(10, 20))
+        
+        r_vid = ctk.CTkFrame(inner_codecs, fg_color="transparent")
+        r_vid.pack(fill="x", pady=6)
+        self.make_labeled_combo_row(r_vid, "Video Codec", self.var_video_codec, ["h264", "h265", "av1"], width=150, label_width=120).pack(side="left")
+        self.make_labeled_combo_row(r_vid, "Audio Codec", self.var_audio_codec, ["opus", "aac", "raw"], width=150, label_width=120).pack(side="left", padx=(40, 0))
+
+        r_rend = ctk.CTkFrame(inner_codecs, fg_color="transparent")
+        r_rend.pack(fill="x", pady=6)
+        self.make_labeled_combo_row(r_rend, "Render Driver", self.renderer_combo_val, ["auto", "direct3d", "opengl", "metal", "software"], width=150, label_width=120).pack(side="left")
+
+        # Card 3: Audio Switches
+        audio_card = self.make_card(canvas, "Audio Options", "Configure hardware audio forwarding flags.")
+        audio_card.pack(fill="x")
+        
+        inner_audio = ctk.CTkFrame(audio_card, fg_color="transparent")
+        inner_audio.pack(fill="x", padx=20, pady=(10, 20))
+        
+        self.make_checkbox(inner_audio, "Mute Device Audio Forwarding", self.var_no_audio).pack(anchor="w", pady=4)
+
+
+    # --- TAB PAGE 4: ADVANCED CONTROLS ---
+    def build_advanced_controls_tab(self, parent):
+        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        canvas.pack(fill="both", expand=True)
+
+        # Card 1: Window Behavior switches
+        win_card = self.make_card(canvas, "Window Options", "Manage viewport styles and positioning.")
+        win_card.pack(fill="x", pady=(0, 16))
+        
+        inner_win = ctk.CTkFrame(win_card, fg_color="transparent")
+        inner_win.pack(fill="x", padx=20, pady=(10, 12))
+        
+        self.make_checkbox(inner_win, "Keep Mirror Window Always on Top", self.var_always_on_top).pack(anchor="w", pady=4)
+        self.make_checkbox(inner_win, "Start in Fullscreen Mode", self.var_fullscreen).pack(anchor="w", pady=4)
+        self.make_checkbox(inner_win, "Borderless Window Frame", self.var_borderless).pack(anchor="w", pady=4)
+        
+        r_orient = ctk.CTkFrame(win_card, fg_color="transparent")
+        r_orient.pack(fill="x", padx=20, pady=(4, 20))
+        self.make_labeled_combo_row(
+            r_orient, "Orientation", self.orientation_combo_val,
+            ["Auto (Rotate with Phone)", "Portrait (@0)", "Landscape (@90)", "Portrait Reversed (@180)", "Landscape Reversed (@270)"],
+            width=230, label_width=100
+        ).pack(side="left")
+
+        # Card 2: Device control behaviors
+        dev_behav_card = self.make_card(canvas, "Device Controls", "Configure physical hardware states during sessions.")
+        dev_behav_card.pack(fill="x", pady=(0, 16))
+        
+        inner_dev_behav = ctk.CTkFrame(dev_behav_card, fg_color="transparent")
+        inner_dev_behav.pack(fill="x", padx=20, pady=(10, 20))
+        
+        self.make_checkbox(inner_dev_behav, "Prevent Device from Sleeping (Stay Awake)", self.var_stay_awake).pack(anchor="w", pady=4)
+        self.make_checkbox(inner_dev_behav, "Turn Physical Device Screen OFF while mirroring", self.var_screen_off).pack(anchor="w", pady=4)
+        self.make_checkbox(inner_dev_behav, "Show Touch Points on screen", self.var_show_touches).pack(anchor="w", pady=4)
+        self.make_checkbox(inner_dev_behav, "Read-Only View (Disable Keyboard/Mouse control)", self.var_no_control).pack(anchor="w", pady=4)
+
+        # Card 3: Camera mode settings
+        cam_card = self.make_card(canvas, "Scrcpy Camera Options", "Configure parameters for using phone as desktop camera input.")
+        cam_card.pack(fill="x", pady=(0, 16))
+        
+        inner_cam = ctk.CTkFrame(cam_card, fg_color="transparent")
+        inner_cam.pack(fill="x", padx=20, pady=(10, 20))
+        
+        r_src = ctk.CTkFrame(inner_cam, fg_color="transparent")
+        r_src.pack(fill="x", pady=6)
+        ctk.CTkLabel(r_src, text="Mirror Source", width=120, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.fonts["body_bold"]).pack(side="left")
+        self.make_radio(r_src, "Screen", "screen").pack(side="left", padx=(10, 18))
+        self.make_radio(r_src, "Back Camera", "camera_back").pack(side="left", padx=(0, 18))
+        self.make_radio(r_src, "Front Camera", "camera_front").pack(side="left", padx=(0, 18))
+        self.make_radio(r_src, "Microphone Only", "mic_only").pack(side="left")
+
+        r_cam_ar = ctk.CTkFrame(inner_cam, fg_color="transparent")
+        r_cam_ar.pack(fill="x", pady=6)
+        self.make_labeled_combo_row(r_cam_ar, "Camera Aspect Ratio", self.cam_ar_combo_val, ["Full Sensor (Default)", "4:3", "16:9"], width=180, label_width=140).pack(side="left")
+        self.make_labeled_combo_row(r_cam_ar, "Camera Orientation", self.cam_orientation_combo_val, ["0° (Default)", "90°", "180°", "270°"], width=180, label_width=140).pack(side="left", padx=(40, 0))
+
+        # Card 4: Extras (Record / Debug Console)
+        extras_card = self.make_card(canvas, "Record & Debug Extras", "Capture mirroring sessions and output detailed logs.")
+        extras_card.pack(fill="x")
+        
+        inner_extras = ctk.CTkFrame(extras_card, fg_color="transparent")
+        inner_extras.pack(fill="x", padx=20, pady=(10, 20))
+        
+        self.make_checkbox(inner_extras, "Record stream output to MP4 file", self.var_record).pack(anchor="w", pady=4)
+        self.make_checkbox(inner_extras, "Enable ADB debug console window", self.var_debug_mode).pack(anchor="w", pady=4)
+
+
+    # --- TAB PAGE 5: TERMINAL CONSOLE ---
+    def build_terminal_console_tab(self, parent):
+        console_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        console_frame.pack(fill="both", expand=True)
+        
+        console_card = self.make_card(console_frame, "ADB Terminal Shell", "Submit direct ADB or console commands. Inspect standard outputs.")
+        console_card.pack(fill="both", expand=True)
+        
+        console_actions = ctk.CTkFrame(console_card, fg_color="transparent")
+        console_actions.pack(fill="x", padx=20, pady=(10, 10))
+        
+        self.console_command_var = ctk.StringVar()
+        self.console_command_entry = self.make_input(console_actions, textvariable=self.console_command_var, placeholder_text="e.g. adb devices or scrcpy --version")
+        self.console_command_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.console_command_entry.bind("<Return>", self.execute_console_command)
+        
+        self.make_action_button(console_actions, "Run", self.execute_console_command, width=90).pack(side="left", padx=(0, 8))
+        self.make_action_button(console_actions, "Clear Log", self.clear_console, width=110).pack(side="left")
+
+        ctk.CTkLabel(
+            console_card,
+            text="💡 Commands execute within application workspace directory. Supports PowerShell, ADB, and Scrcpy runtime arguments.",
+            font=self.fonts["caption"], text_color=COLOR_TEXT_MUTED, anchor="w"
+        ).pack(fill="x", padx=20, pady=(0, 8))
+
+        self.console_textbox = ctk.CTkTextbox(
+            console_card, fg_color=COLOR_CONSOLE_BG, border_color=COLOR_BORDER,
+            border_width=1, text_color=COLOR_TEXT_PRIMARY, corner_radius=12,
+            font=self.fonts["console"], activate_scrollbars=True, wrap="word"
+        )
+        self.console_textbox.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.console_textbox.configure(state="disabled")
+        
+        self.setup_console_tags()
+        self.setup_console_scroll_isolation()
+        self.console_mgr.log("INFO", "Console initialized.")
+
+
+    # --- TAB PAGE 6: GUIDANCE & HELP ---
+    def build_guidance_help_tab(self, parent):
         content_area = ctk.CTkFrame(parent, fg_color="transparent")
-        content_area.pack(fill="both", expand=True, padx=6, pady=10)
+        content_area.pack(fill="both", expand=True)
 
-        frames = {}
+        self.tutorial_nav_var = ctk.StringVar(value="USB Debugging")
+        self.tutorial_nav_segmented = ctk.CTkSegmentedButton(
+            content_area, values=["USB Debugging", "Docs & Website", "Videos", "faQs"],
+            variable=self.tutorial_nav_var, font=self.fonts["body_bold"],
+            fg_color=COLOR_FIELD_BG, selected_color=COLOR_ACCENT,
+            selected_hover_color=COLOR_ACCENT_HOVER, unselected_color=COLOR_FIELD_BG,
+            unselected_hover_color=COLOR_CARD_HOVER, command=self.switch_subtab
+        )
+        self.tutorial_nav_segmented.pack(fill="x", pady=(0, 12))
 
-        usb_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
-        frames["USB Debugging"] = usb_frame
+        self.subtab_container = ctk.CTkFrame(content_area, fg_color="transparent")
+        self.subtab_container.pack(fill="both", expand=True)
+
+        self.subtab_frames = {}
+        for sub in ["USB Debugging", "Docs & Website", "Videos", "faQs"]:
+            self.subtab_frames[sub] = ctk.CTkScrollableFrame(self.subtab_container, fg_color="transparent")
+
+        # 1. USB Debugging Brand Instructions
+        usb_frame = self.subtab_frames["USB Debugging"]
+        brands_card = self.make_card(usb_frame, "Smartphones Brand Guides", "Find configuration options for your specific phone manufacturer.")
+        brands_card.pack(fill="x", pady=(0, 16))
         
-        brands_frame = self.make_card(usb_frame, "Enable USB Debugging", "Find the exact steps for your smartphone manufacturer.")
-        brands_frame.pack(fill="x", pady=(0, 16), padx=6)
-        
-        grid_container = ctk.CTkFrame(brands_frame, fg_color="transparent")
-        grid_container.pack(fill="x", padx=18, pady=(12, 12))
+        grid_brands = ctk.CTkFrame(brands_card, fg_color="transparent")
+        grid_brands.pack(fill="x", padx=20, pady=(10, 12))
         
         brand_names = ["Samsung", "Xiaomi", "OnePlus", "Oppo", "Vivo", "Realme", "Motorola", "Others"]
+        self.links_container = ctk.CTkFrame(brands_card, fg_color=COLOR_FIELD_BG, corner_radius=12)
         
-        links_container = ctk.CTkFrame(brands_frame, fg_color=FIELD_BG, corner_radius=8)
-        
-        def show_brand_videos(brand):
-            for widget in links_container.winfo_children():
-                widget.destroy()
-            
-            links_container.pack(fill="x", padx=18, pady=(0, 18))
-            ctk.CTkLabel(links_container, text=f"Tutorials for {brand}", font=self.fonts["body_bold"], text_color=TEXT).pack(anchor="w", padx=16, pady=(12, 8))
-            
-            for i in range(1, 4):
-                btn = self.make_action_button(links_container, f"▶  {brand} Tutorial {i}", lambda u="https://youtube.com/watch?v=placeholder": webbrowser.open(u), width=300)
-                btn.pack(fill="x", padx=16, pady=(0, 8))
-                btn.configure(anchor="w")
-
         for i, brand in enumerate(brand_names):
             row = i // 4
             col = i % 4
-            grid_container.grid_columnconfigure(col, weight=1)
-            btn = ctk.CTkButton(grid_container, text=brand, command=lambda b=brand: show_brand_videos(b), fg_color=PANEL_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, font=self.fonts["body"])
+            grid_brands.grid_columnconfigure(col, weight=1)
+            btn = ctk.CTkButton(
+                grid_brands, text=brand, command=lambda b=brand: self.show_brand_videos(b),
+                fg_color=COLOR_FIELD_BG, hover_color=COLOR_CARD_HOVER, border_color=COLOR_BORDER,
+                border_width=1, text_color=COLOR_TEXT_PRIMARY, font=self.fonts["body"]
+            )
             btn.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
 
-        docs_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
-        frames["Docs"] = docs_frame
+        # 2. Written Documentation
+        docs_frame = self.subtab_frames["Docs & Website"]
+        docs_card = self.make_card(docs_frame, "Written Documentation & GitHub", "Access official resources and source codes.")
+        docs_card.pack(fill="x", pady=(0, 16))
         
-        docs_card = self.make_card(docs_frame, "Written Docs & Links", "Official project resources and downloads.")
-        docs_card.pack(fill="x", pady=(0, 16), padx=6)
-        docs_inner = ctk.CTkFrame(docs_card, fg_color="transparent")
-        docs_inner.pack(fill="x", padx=18, pady=(12, 18))
+        inner_docs = ctk.CTkFrame(docs_card, fg_color="transparent")
+        inner_docs.pack(fill="x", padx=20, pady=(10, 20))
         
-        btn_github = self.make_action_button(docs_inner, "GitHub Repository", lambda: webbrowser.open("https://github.com/EXPOSUREEE"), width=200)
-        btn_github.pack(side="left", padx=(0, 10))
-        btn_web = self.make_action_button(docs_inner, "Official Website & Downloads", lambda: webbrowser.open("https://exposureee.in/scrcpy-gui-by-exposureee/"), width=250)
-        btn_web.pack(side="left")
+        self.make_action_button(inner_docs, "GitHub Repository", lambda: webbrowser.open("https://github.com/EXPOSUREEE"), width=200).pack(side="left", padx=(0, 12))
+        self.make_action_button(inner_docs, "Official Website & Downloads", lambda: webbrowser.open("https://exposureee.in/scrcpy-gui-by-exposureee/"), width=240).pack(side="left")
 
-        videos_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
-        frames["Videos"] = videos_frame
+        # 3. Video Guides
+        videos_frame = self.subtab_frames["Videos"]
+        video_card = self.make_card(videos_frame, "Video tutorials by EXPOSUREEE", "Step-by-step video instructions from the creator.")
+        video_card.pack(fill="x", pady=(0, 16))
         
-        video_card = self.make_card(videos_frame, "Video by Exposureee", "Watch step-by-step guides from the creator.")
-        video_card.pack(fill="x", pady=(0, 16), padx=6)
-        video_inner = ctk.CTkFrame(video_card, fg_color="transparent")
-        video_inner.pack(fill="x", padx=18, pady=(12, 18))
-
+        inner_video = ctk.CTkFrame(video_card, fg_color="transparent")
+        inner_video.pack(fill="x", padx=20, pady=(10, 20))
+        
         videos = [
             ("I Updated Scrcpy GUI: Now It's Perfect for Android Screen Mirroring", "https://youtu.be/U7byl9CLkU4"),
             ("Best Free Android to PC Screen Mirroring Software in 2025", "https://youtu.be/pWKY_dntX5c"),
@@ -702,322 +1681,74 @@ class ScrcpyGUI:
             ("Free Android to PC Screen Mirroring Software just for You", "https://youtu.be/WHUsT8Hekoc"),
             ("SCRCPY have MORE FEATURES than ApowerMirror & Douwan", "https://youtu.be/smVw6w8bTKk"),
         ]
-        
         for title, url in videos:
-            btn = self.make_action_button(video_inner, f"▶  {title}", lambda u=url: webbrowser.open(u), width=500)
-            btn.pack(fill="x", pady=(0, 8))
+            btn = self.make_action_button(inner_video, f"▶  {title}", lambda u=url: webbrowser.open(u), width=500)
+            btn.pack(fill="x", pady=6)
             btn.configure(anchor="w")
 
-        others_card = self.make_card(videos_frame, "Video tutorials by others", "Community created guides and reviews.")
-        others_card.pack(fill="x", pady=(0, 16), padx=6)
-        others_inner = ctk.CTkFrame(others_card, fg_color="transparent")
-        others_inner.pack(fill="x", padx=18, pady=(12, 18))
+        # 4. Frequently Asked Questions
+        faqs_frame = self.subtab_frames["faQs"]
+        faq_card = self.make_card(faqs_frame, "Frequently Asked Questions", "Quick solutions to common configuration problems.")
+        faq_card.pack(fill="x", pady=(0, 16))
         
-        for i in range(1, 4):
-            btn = self.make_action_button(others_inner, f"▶  Community Tutorial {i}", lambda u="https://youtube.com/watch?v=placeholder": webbrowser.open(u), width=500)
-            btn.pack(fill="x", pady=(0, 8))
-            btn.configure(anchor="w")
-
-        faqs_frame = ctk.CTkScrollableFrame(content_area, fg_color="transparent")
-        frames["faQs"] = faqs_frame
+        inner_faq = ctk.CTkFrame(faq_card, fg_color="transparent")
+        inner_faq.pack(fill="x", padx=20, pady=(10, 20))
         
-        faq_card = self.make_card(faqs_frame, "Frequently Asked Questions", "Quick solutions to common issues.")
-        faq_card.pack(fill="x", pady=(0, 16), padx=6)
-        faq_inner = ctk.CTkFrame(faq_card, fg_color="transparent")
-        faq_inner.pack(fill="x", padx=18, pady=(12, 18))
-
         faqs = [
             ("Q: My phone is not detected when I scan?", "A: Make sure Developer Options are unlocked and 'USB debugging' is enabled on your phone. Re-plug the USB and check for an authorization prompt on your phone's screen."),
             ("Q: How do I connect wirelessly?", "A: First connect via USB. Wait for it to show 'USB Connected' in the Next Step guide, then click 'Continue Wireless' -> 'Enable TCP/IP' -> 'Connect Wi-Fi'."),
             ("Q: Why is there no audio playing?", "A: Audio forwarding is only supported on Android 11+. Ensure you haven't checked 'Disable audio' in the Advanced tab."),
             ("Q: The stream is lagging or pixelated?", "A: In the Video & Audio tab, lower the Bitrate (e.g. 4 Mbps) or set a Max Size (e.g. 1080) to reduce the network/USB load.")
         ]
-
         for q, a in faqs:
-            q_label = ctk.CTkLabel(faq_inner, text=q, font=self.fonts["body_bold"], text_color=TEXT, justify="left", anchor="w")
-            q_label.pack(fill="x", pady=(8, 2))
-            a_label = ctk.CTkLabel(faq_inner, text=a, font=self.fonts["body"], text_color=MUTED_TEXT, justify="left", anchor="w", wraplength=450)
-            a_label.pack(fill="x", pady=(0, 12))
-            faq_card.bind("<Configure>", lambda e, a_widget=a_label: a_widget.configure(wraplength=max(200, e.width - 80)), add="+")
+            ctk.CTkLabel(inner_faq, text=q, font=self.fonts["body_bold"], text_color=COLOR_TEXT_PRIMARY, justify="left", anchor="w").pack(fill="x", pady=(8, 2))
+            ctk.CTkLabel(inner_faq, text=a, font=self.fonts["body"], text_color=COLOR_TEXT_MUTED, justify="left", anchor="w", wraplength=720).pack(fill="x", pady=(0, 12))
 
-        def switch_subtab(selected_tab):
-            self.tutorial_nav_var.set(selected_tab)
-            for name, frame in frames.items():
-                if name == selected_tab:
-                    frame.pack(fill="both", expand=True)
-                else:
-                    frame.pack_forget()
-                    
-        self.tutorial_switch_subtab = switch_subtab
-        self.tutorial_nav_segmented.configure(command=switch_subtab)
-        switch_subtab("USB Debugging")
+        # Default Active Subtab
+        self.switch_subtab("USB Debugging")
 
-    def build_right_rail(self, parent):
-        session_card = self.make_card(parent, "Current Session", "Live device and launch feedback.")
-        session_card.pack(fill="x", padx=16, pady=(18, 14))
-        ctk.CTkLabel(session_card, textvariable=self.status_var, font=self.fonts["body_bold"], text_color=TEXT, justify="left", wraplength=230).pack(anchor="w", padx=20, pady=(0, 14))
-        self.make_info_row(session_card, "Connection", self.connection_summary_var, accent=True)
-        self.make_info_row(session_card, "Quality", self.quality_summary_var)
-        self.make_info_row(session_card, "Audio", self.audio_summary_var)
+    def switch_subtab(self, subtab_name):
+        for frame in self.subtab_frames.values():
+            frame.pack_forget()
+        if subtab_name in self.subtab_frames:
+            self.subtab_frames[subtab_name].pack(fill="both", expand=True)
 
-        guidance_card = self.make_card(parent, "Need Help?", "Stuck and don't know what to do? Follow this.", fg_color=GUIDE_BG, border_color=GUIDE_BORDER)
-        guidance_card.pack(fill="x", padx=16, pady=(0, 14))
-        ctk.CTkLabel(guidance_card, textvariable=self.guidance_step_var, font=self.fonts["caption_bold"], text_color=ACCENT_ALT, justify="left", anchor="w").pack(fill="x", padx=20, pady=(4, 2))
-        ctk.CTkLabel(guidance_card, textvariable=self.guidance_title_var, font=self.fonts["body_bold"], text_color=TEXT, justify="left", anchor="w").pack(fill="x", padx=20, pady=(0, 6))
-        ctk.CTkLabel(guidance_card, textvariable=self.guidance_detail_var, font=self.fonts["body"], text_color=MUTED_TEXT, justify="left", anchor="w", wraplength=230).pack(fill="x", padx=20, pady=(0, 14))
-        self.guidance_action_frame = ctk.CTkFrame(guidance_card, fg_color="transparent")
-        self.guidance_action_frame.pack(fill="x", padx=20, pady=(0, 18))
-
-        self.guidance_button = self.make_primary_button(self.guidance_action_frame, "Scan devices", self.run_guidance_action, height=40)
-        self.guidance_button.pack(fill="x")
-
-        self.guidance_button_2 = self.make_action_button(self.guidance_action_frame, "Secondary", self.run_guidance_action_2)
-        self.guidance_button_2.pack(fill="x", pady=(8, 0))
-        self.guidance_button_2.pack_forget()
-
-        def go_to_tutorials(e=None):
-            self.switch_tab("Tutorials")
-            if hasattr(self, 'tutorial_switch_subtab'):
-                self.tutorial_switch_subtab("USB Debugging")
-
-        tutorial_link = ctk.CTkLabel(self.guidance_action_frame, text="Watch the tutorial of your own brand phone by clicking here.", font=self.fonts["caption"], text_color=ACCENT_ALT, cursor="hand2", justify="left", wraplength=230)
-        tutorial_link.pack(fill="x", pady=(12, 0))
-        tutorial_link.bind("<Button-1>", go_to_tutorials)
-
-        quick_card = self.make_card(parent, "Quick Actions", "High-frequency tools without opening another tab.")
-        quick_card.pack(fill="x", padx=16, pady=(0, 14))
-        quick_grid = ctk.CTkFrame(quick_card, fg_color="transparent")
-        quick_grid.pack(fill="x", padx=18, pady=(8, 18))
-        quick_grid.grid_columnconfigure((0, 1), weight=1)
-        self.make_action_button(quick_grid, "Scan devices", self.refresh_devices, width=120).grid(row=0, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.make_action_button(quick_grid, "Auto get IP", self.get_device_ip, width=120).grid(row=0, column=1, sticky="ew", padx=(6, 0), pady=6)
-        self.make_action_button(quick_grid, "Enable TCP/IP", self.enable_tcpip, width=120).grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.make_action_button(quick_grid, "Connect Wi-Fi", self.connect_wireless, width=120).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=6)
-        self.make_action_button(quick_grid, "Kill ADB", self.kill_adb_server, width=120).grid(row=2, column=0, sticky="ew", padx=(0, 6), pady=6)
-        self.make_action_button(quick_grid, "Reset pairing", self.reset_device_connection, width=120).grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=6)
-
-        summary_card = self.make_card(parent, "Launch Summary", "A compact readout of the options that will shape the next run.")
-        summary_card.pack(fill="x", padx=16, pady=(0, 14))
-        self.make_info_row(summary_card, "Source", self.source_summary_var)
-        self.make_info_row(summary_card, "Window", self.window_summary_var)
-        self.make_info_row(summary_card, "Extras", self.extras_summary_var)
-
-        support_card = self.make_card(parent, "Support & Updates", "Keep the tool current or support the project.")
-        support_card.pack(fill="x", padx=16, pady=(0, 16))
-        support_actions = ctk.CTkFrame(support_card, fg_color="transparent")
-        support_actions.pack(fill="x", padx=18, pady=(8, 10))
-        self.make_primary_button(support_actions, "Support via UPI", self.donate_upi).pack(fill="x", pady=(0, 10))
-        self.make_action_button(support_actions, "Project page", self.open_download, width=140).pack(fill="x")
-        self.btn_update = ctk.CTkButton(support_card, text="Update available", fg_color=SUCCESS, hover_color=SUCCESS_HOVER, text_color=TEXT, font=self.fonts["button"], corner_radius=10, command=self.open_download)
-        self.btn_update.pack(fill="x", padx=18, pady=(0, 18))
-        self.btn_update.pack_forget()
-
-    def build_console_tab(self, parent):
-        console_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        console_frame.pack(fill="both", expand=True, padx=6, pady=10)
-        console_card = self.make_card(console_frame, "Console", "Run commands directly and inspect exact stdout, stderr, and quick fix hints.")
-        console_card.pack(fill="both", expand=True, padx=6)
-        console_actions = ctk.CTkFrame(console_card, fg_color="transparent")
-        console_actions.pack(fill="x", padx=18, pady=(8, 10))
-        self.console_command_var = ctk.StringVar()
-        self.console_command_entry = self.make_input(console_actions, textvariable=self.console_command_var, placeholder_text="Type a command, e.g. adb devices or scrcpy --version")
-        self.console_command_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.console_command_entry.bind("<Return>", self.execute_console_command)
-        self.make_action_button(console_actions, "Run", self.execute_console_command, width=90).pack(side="left", padx=(0, 8))
-        self.make_action_button(console_actions, "Clear log", self.clear_console, width=120).pack(side="left")
-
-        hint_row = ctk.CTkFrame(console_card, fg_color="transparent")
-        hint_row.pack(fill="x", padx=18, pady=(0, 10))
-        ctk.CTkLabel(hint_row, text="Commands run inside the app folder. You can use adb, scrcpy, PowerShell commands, or regular shell commands.", font=self.fonts["caption"], text_color=MUTED_TEXT, justify="left", anchor="w", wraplength=820).pack(fill="x")
-
-        self.console_textbox = ctk.CTkTextbox(console_card, fg_color=FIELD_BG, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=8, font=self.fonts["console"], activate_scrollbars=True, wrap="word")
-        self.console_textbox.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        self.console_textbox.configure(state="disabled")
-        self.setup_console_tags()
-        self.setup_console_scroll_isolation()
-        self.console_mgr.log("INFO", "Console initialized.")
-
-    def build_connection_tab(self, parent):
-        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        canvas.pack(fill="both", expand=True, padx=6, pady=10)
-
-        dev_frame = self.make_card(canvas, "USB Connection", "Choose a connected Android device, then launch from the hero panel or side rail.")
-        dev_frame.pack(fill="x", pady=(0, 16), padx=6)
-        inner_dev = ctk.CTkFrame(dev_frame, fg_color="transparent")
-        inner_dev.pack(fill="x", padx=18, pady=(12, 18))
-        self.device_combo = self.make_combo(inner_dev, values=[], command=lambda _: self.refresh_dashboard_state())
-        self.device_combo.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.make_action_button(inner_dev, "Scan devices", self.refresh_devices).pack(side="right")
-
-        workflow = self.make_card(canvas, "Wireless Mode", "Connect your device over Wi-Fi, with or without a USB cable.")
-        workflow.pack(fill="x", pady=(0, 16), padx=6)
+    def show_brand_videos(self, brand):
+        for widget in self.links_container.winfo_children():
+            widget.destroy()
         
-        # Segmented button to switch between methods
-        self.wireless_method_var = ctk.StringVar(value="USB Assisted")
-        self.wireless_method_segmented = ctk.CTkSegmentedButton(
-            workflow,
-            values=["USB Assisted", "Direct Pairing (Android 11+)"],
-            variable=self.wireless_method_var,
-            font=self.fonts["body_bold"],
-            fg_color=FIELD_BG,
-            selected_color=ACCENT,
-            selected_hover_color=ACCENT_HOVER,
-            unselected_color=FIELD_BG,
-            unselected_hover_color=CARD_HOVER,
-            command=self.toggle_wireless_method
-        )
-        self.wireless_method_segmented.pack(fill="x", padx=18, pady=(10, 10))
+        self.links_container.pack(fill="x", padx=20, pady=(0, 18))
+        ctk.CTkLabel(self.links_container, text=f"Written Checklist for {brand}", font=self.fonts["body_bold"], text_color=COLOR_TEXT_PRIMARY).pack(anchor="w", padx=16, pady=(12, 8))
         
-        # Frame for USB Assisted Wireless
-        self.usb_wireless_frame = ctk.CTkFrame(workflow, fg_color="transparent")
-        self.usb_wireless_frame.pack(fill="x", padx=0, pady=0)
+        steps = {
+            "Samsung": ["Settings > About Phone > Software Info > Tap Build number 7 times.", "Settings > Developer Options > Enable USB Debugging."],
+            "Xiaomi": ["Settings > About Phone > Tap MIUI version 7 times.", "Settings > Additional Settings > Developer Options > Enable USB Debugging & Install via USB & USB Debugging (Security Settings)."],
+            "OnePlus": ["Settings > About Device > Version > Tap Build number 7 times.", "Settings > System/Additional Settings > Developer options > Enable USB debugging."],
+            "Oppo": ["Settings > About Device > Version > Tap Build number 7 times.", "Settings > Additional Settings > Developer Options > Enable USB Debugging."],
+            "Vivo": ["Settings > About Phone > Software info > Tap Build number 7 times.", "Settings > System management > Developer options > Enable USB debugging."],
+            "Realme": ["Settings > About Device > Version > Tap Build number 7 times.", "Settings > Additional Settings > Developer Options > Enable USB Debugging."],
+            "Motorola": ["Settings > About Phone > Tap Build number 7 times.", "Settings > System > Developer options > Enable USB debugging."],
+            "Others": ["Check settings for 'Build number' or 'Software version'.", "Find Developer Options, and toggle USB Debugging ON."]
+        }
         
-        r_ip = ctk.CTkFrame(self.usb_wireless_frame, fg_color="transparent")
-        r_ip.pack(fill="x", padx=18, pady=(0, 10))
-        ctk.CTkLabel(r_ip, text="Device IP", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
-        self.make_input(r_ip, textvariable=self.var_ip, placeholder_text="192.168.1.25").pack(side="left", fill="x", expand=True, padx=(10, 10))
-        self.make_action_button(r_ip, "Auto get IP", self.get_device_ip).pack(side="right")
-
-        r_wbtn = ctk.CTkFrame(self.usb_wireless_frame, fg_color="transparent")
-        r_wbtn.pack(fill="x", padx=18, pady=(0, 18))
-        self.make_action_button(r_wbtn, "Enable TCP/IP", self.enable_tcpip, width=160).pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.make_action_button(r_wbtn, "Connect wirelessly", self.connect_wireless, width=170).pack(side="left", fill="x", expand=True, padx=(6, 0))
-
-        # Frame for Direct Wireless Pairing (Android 11+)
-        self.direct_wireless_frame = ctk.CTkFrame(workflow, fg_color="transparent")
+        brand_steps = steps.get(brand, ["Connect via USB.", "Enable USB Debugging in Developer Options."])
+        for i, step in enumerate(brand_steps, 1):
+            ctk.CTkLabel(self.links_container, text=f"{i}. {step}", font=self.fonts["body"], text_color=COLOR_TEXT_MUTED, justify="left", anchor="w").pack(anchor="w", padx=20, pady=4)
         
-        # IP Row: Device IP and Pairing Port
-        r_direct_ip = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
-        r_direct_ip.pack(fill="x", padx=18, pady=(0, 10))
-        ctk.CTkLabel(r_direct_ip, text="Device IP", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
-        self.make_input(r_direct_ip, textvariable=self.var_ip, placeholder_text="192.168.1.25").pack(side="left", fill="x", expand=True, padx=(10, 10))
-        
-        ctk.CTkLabel(r_direct_ip, text="Pairing Port", width=80, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
-        self.make_input(r_direct_ip, textvariable=self.var_pair_port, placeholder_text="37283", width=80).pack(side="left", padx=(10, 0))
-        
-        # Pairing Code Row
-        r_direct_code = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
-        r_direct_code.pack(fill="x", padx=18, pady=(0, 10))
-        ctk.CTkLabel(r_direct_code, text="Pairing Code", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
-        self.make_input(r_direct_code, textvariable=self.var_pair_code, placeholder_text="123456").pack(side="left", fill="x", expand=True, padx=(10, 10))
-        self.make_action_button(r_direct_code, "Pair Device", self.pair_wireless, width=120).pack(side="right")
-        
-        # Connection Port Row
-        r_direct_connect = ctk.CTkFrame(self.direct_wireless_frame, fg_color="transparent")
-        r_direct_connect.pack(fill="x", padx=18, pady=(0, 10))
-        ctk.CTkLabel(r_direct_connect, text="Connect Port", width=100, anchor="w", text_color=MUTED_TEXT, font=self.fonts["body"]).pack(side="left")
-        self.make_input(r_direct_connect, textvariable=self.var_connect_port, placeholder_text="42911").pack(side="left", fill="x", expand=True, padx=(10, 10))
-        self.make_action_button(r_direct_connect, "Auto-detect", self.auto_detect_port, width=110).pack(side="left")
-        self.make_action_button(r_direct_connect, "Connect", self.connect_wireless_direct, width=120).pack(side="right", padx=(10, 0))
+        # Link to youtube search
+        brand_query = urllib.parse.quote(f"how to enable usb debugging {brand}")
+        search_url = f"https://www.youtube.com/results?search_query={brand_query}"
+        self.make_action_button(self.links_container, f"🔍 Find {brand} video on YouTube", lambda: webbrowser.open(search_url), width=280).pack(anchor="w", padx=20, pady=(10, 14))
 
-        # QR Code note frame
-        qr_note = ctk.CTkFrame(self.direct_wireless_frame, fg_color=FIELD_BG, border_color=BORDER, border_width=1, corner_radius=8)
-        qr_note.pack(fill="x", padx=18, pady=(0, 18))
-        
-        ctk.CTkLabel(qr_note, text="💡 Looking for QR Code Pairing?", font=self.fonts["body_bold"], text_color=ACCENT_ALT, justify="left", anchor="w").pack(fill="x", padx=16, pady=(10, 2))
-        
-        note_text = (
-            "Android's QR pairing requires a heavy background service exclusive to full IDEs like Android Studio. "
-            "For lightweight wrappers (like Scrcpy Deck), the Pairing Code method above is the standard, secure, "
-            "and highly reliable way. Simply enter the 6-digit code shown on your phone's screen to pair instantly!"
-        )
-        ctk.CTkLabel(qr_note, text=note_text, font=self.fonts["caption"], text_color=MUTED_TEXT, justify="left", anchor="w", wraplength=480).pack(fill="x", padx=16, pady=(0, 10))
 
-        tips = self.make_card(canvas, "Connection Notes", "A short checklist so the wireless flow stays predictable.")
-        tips.pack(fill="x", padx=6)
-        notes = [
-            "Keep both 'USB debugging' and 'Wireless debugging' turned ON inside Developer options.",
-            "USB debugging is REQUIRED for the one-click dynamic-to-stable TCP/IP (port 5555) connection fallback to succeed.",
-            "Keep the phone unlocked for the first authorization prompt.",
-            "If no IP is found, verify the device is on Wi-Fi and still trusted over USB.",
-            "Use Reset pairing when you want ADB to forget this computer and force a fresh authorization flow.",
-        ]
-        for note in notes:
-            ctk.CTkLabel(tips, text=f"- {note}", font=self.fonts["body"], text_color=MUTED_TEXT, justify="left", wraplength=760).pack(anchor="w", padx=20, pady=4)
-        ctk.CTkLabel(tips, text="", height=8).pack()
-
-    def build_video_tab(self, parent):
-        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        canvas.pack(fill="both", expand=True, padx=6, pady=10)
-
-        src_frame = self.make_card(canvas, "Source", "Pick what scrcpy should stream from your phone.")
-        src_frame.pack(fill="x", pady=(0, 16), padx=6)
-        inner_src = ctk.CTkFrame(src_frame, fg_color="transparent")
-        inner_src.pack(fill="x", padx=18, pady=(12, 10))
-        self.make_radio(inner_src, "Screen", "screen").pack(side="left", padx=(0, 18))
-        self.make_radio(inner_src, "Back Camera", "camera_back").pack(side="left", padx=(0, 18))
-        self.make_radio(inner_src, "Front Camera", "camera_front").pack(side="left", padx=(0, 18))
-        self.make_radio(inner_src, "Only Microphone", "mic_only").pack(side="left")
-
-        inner_src_opts = ctk.CTkFrame(src_frame, fg_color="transparent")
-        inner_src_opts.pack(fill="x", padx=18, pady=(0, 18))
-        self.make_labeled_combo_row(inner_src_opts, "Cam rotate", self.cam_orientation_combo_val, ["0° (Default)", "90°", "180°", "270°"], width=120).pack(side="left")
-
-        qual_frame = self.make_card(canvas, "Quality", "Keep defaults for smooth mirroring, or tune for sharper output.")
-        qual_frame.pack(fill="x", pady=(0, 16), padx=6)
-        
-        row1 = ctk.CTkFrame(qual_frame, fg_color="transparent")
-        row1.pack(fill="x", padx=18, pady=(12, 10))
-        self.make_labeled_input_row(row1, "Bitrate (Mbps)", self.var_bitrate).pack(side="left")
-        self.make_labeled_input_row(row1, "Max FPS", self.var_max_fps, label_width=100).pack(side="left", padx=(30, 0))
-
-        row2 = ctk.CTkFrame(qual_frame, fg_color="transparent")
-        row2.pack(fill="x", padx=18, pady=(0, 18))
-        self.make_labeled_input_row(row2, "Max size", self.var_max_size, extra_text="0 keeps original size, e.g. 1080 or 720").pack(side="left")
-
-        codec_frame = self.make_card(canvas, "Codecs & Render", "Compatibility-first defaults with quick renderer control.")
-        codec_frame.pack(fill="x", padx=6)
-        
-        row3 = ctk.CTkFrame(codec_frame, fg_color="transparent")
-        row3.pack(fill="x", padx=18, pady=(12, 10))
-        self.make_labeled_combo_row(row3, "Video codec", self.var_video_codec, ["h264", "h265", "av1"]).pack(side="left")
-        self.make_labeled_combo_row(row3, "Audio codec", self.var_audio_codec, ["opus", "aac", "raw"]).pack(side="left", padx=(30, 0))
-
-        row4 = ctk.CTkFrame(codec_frame, fg_color="transparent")
-        row4.pack(fill="x", padx=18, pady=(0, 18))
-        self.make_labeled_combo_row(row4, "Renderer", self.renderer_combo_val, ["auto", "opengl", "direct3d", "software"], width=120).pack(side="left")
-        self.make_labeled_combo_row(row4, "Camera ratio", self.cam_ar_combo_val, ["Full Sensor (Default)", "16:9", "4:3", "1:1"], width=180).pack(side="left", padx=(30, 0))
-
-    def build_advanced_tab(self, parent):
-        canvas = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        canvas.pack(fill="both", expand=True, padx=6, pady=10)
-
-        win_frame = self.make_card(canvas, "Window & Display", "Useful launch flags for screen behavior and interaction.")
-        win_frame.pack(fill="x", pady=(0, 16), padx=6)
-        
-        inner_win = ctk.CTkFrame(win_frame, fg_color="transparent")
-        inner_win.pack(fill="x", padx=18, pady=(12, 10))
-        
-        checks = [
-            ("Always on top", self.var_always_on_top),
-            ("Borderless window", self.var_borderless),
-            ("Fullscreen", self.var_fullscreen),
-            ("Stay Awake", self.var_stay_awake),
-            ("Turn Screen Off", self.var_screen_off),
-            ("Show Touches", self.var_show_touches),
-            ("View only", self.var_no_control),
-            ("Disable audio", self.var_no_audio),
-        ]
-        self.make_checkbox_group(inner_win, checks)
-
-        r_orient = ctk.CTkFrame(win_frame, fg_color="transparent")
-        r_orient.pack(fill="x", padx=18, pady=(4, 18))
-        self.make_labeled_combo_row(r_orient, "Orientation", self.orientation_combo_val, ["Auto (Rotate with Phone)", "Portrait (@0)", "Landscape (@90)", "Portrait Reversed (@180)", "Landscape Reversed (@270)"], width=230, label_width=100).pack(side="left")
-
-        extra_frame = self.make_card(canvas, "Extras", "Recording and debugging options for power users.")
-        extra_frame.pack(fill="x", padx=6)
-        
-        inner_extra = ctk.CTkFrame(extra_frame, fg_color="transparent")
-        inner_extra.pack(fill="x", padx=18, pady=12)
-        self.make_checkbox_group(inner_extra, [("Record output to MP4", self.var_record), ("Enable debug console", self.var_debug_mode)])
-
-    # ADB Interaction callbacks
+    # --- ADB AND SCRCPY CALLBACK HOOKS (Fully Synchronous/Asynchronous) ---
     def clear_connected_device_state(self, connection_text="Waiting for your first device scan"):
         self.var_ip.set("")
         self.device_count_var.set("0")
         self.connection_summary_var.set(connection_text)
         self.workflow_tcpip_enabled = False
         self.workflow_wireless_ready = False
+        self.update_status_led("disconnected")
         if hasattr(self, "device_combo"):
             try:
                 self.device_combo.configure(values=["No devices found"])
@@ -1025,8 +1756,19 @@ class ScrcpyGUI:
             except Exception: pass
         self.clear_workflow_issue()
 
+    def update_status_led(self, state):
+        if not hasattr(self, "status_led") or not self.status_led.winfo_exists():
+            return
+        if state == "connected":
+            self.status_led.configure(fg_color=COLOR_SUCCESS)
+        elif state == "scanning":
+            self.status_led.configure(fg_color=COLOR_WARNING)
+        else:
+            self.status_led.configure(fg_color=COLOR_DANGER)
+
     def refresh_devices(self):
         self.set_status("Scanning connected Android devices...")
+        self.update_status_led("scanning")
         self.root.update_idletasks()
 
         def on_success(devices):
@@ -1049,7 +1791,7 @@ class ScrcpyGUI:
         for d in devices:
             label = d.display_name
             if name_counts[d.display_name] > 1:
-                label = f"{d.display_name} \u00b7 {d.serial[:6]}"
+                label = f"{d.display_name} · {d.serial[:6]}"
             display_names.append(label)
             self.device_label_to_serial[label] = d.serial
             self.device_serial_to_label[d.serial] = label
@@ -1064,6 +1806,7 @@ class ScrcpyGUI:
         self.device_count_var.set(str(len(devices)))
         self.workflow_wireless_ready = ":" in selected_serial
         
+        self.update_status_led("connected")
         if self.workflow_wireless_ready:
             self.connection_summary_var.set(f"Wireless ready on {selected_label}")
             self.set_status(f"Wireless device detected: {selected_label}")
@@ -1076,23 +1819,36 @@ class ScrcpyGUI:
     def _refresh_devices_error(self, reason):
         self.device_count_var.set("0")
         self.workflow_wireless_ready = False
+        self.update_status_led("disconnected")
         if reason == "no_devices":
             self.device_combo.configure(values=["No devices found"])
             self.device_combo.set("No devices found")
             self.connection_summary_var.set("No active ADB devices")
             self.set_status("No devices found.")
-            self.set_workflow_issue("No Android device is available right now.", "\n1. Spam tap 'Build number' in \nSettings > About Phone to unlock 'Developer Options'.\n\n2. Enable 'USB debugging' \n inside 'Developer Options'.\n\n3. Connect via USB and click Scan devices.", self.refresh_devices, "Scan devices")
+            self.set_workflow_issue(
+                "No Android device is available right now.",
+                "1. Connect via USB\n2. Turn ON USB debugging in Developer Options\n3. Click Scan devices.",
+                self.refresh_devices, "Scan Devices"
+            )
         else:
             self.connection_summary_var.set("ADB is not responding")
             self.set_status("ADB Error.")
-            self.set_workflow_issue("ADB did not answer the device scan.", "Make sure adb is available, then try Scan devices or Kill ADB if the server is stuck.", self.kill_adb_server, "Kill ADB")
+            self.set_workflow_issue(
+                "ADB did not answer the device scan request.",
+                "Make sure adb is available, then retry or reset adb server.",
+                self.kill_adb_server, "Kill ADB"
+            )
 
     def get_device_ip(self):
         serial = self.get_selected_device()
         if not serial or serial == "No devices found":
             messagebox.showwarning("Error", "Select a device connected via USB first.")
             self.console_mgr.log("WARN", "Cannot fetch IP without a selected USB device.")
-            self.set_workflow_issue("The app needs a USB-connected device before it can fetch the Wi-Fi IP.", "Connect the phone with USB, then scan devices again.", self.refresh_devices, "Scan devices")
+            self.set_workflow_issue(
+                "The app needs a USB-connected device before it can fetch the Wi-Fi IP.",
+                "Connect the phone with USB, then scan devices again.",
+                self.refresh_devices, "Scan Devices"
+            )
             return
         self.set_status("Fetching Wi-Fi IP from the selected device...")
 
@@ -1113,7 +1869,11 @@ class ScrcpyGUI:
     def _get_device_ip_error(self):
         self.set_status("Could not find IP (is Wi-Fi on?)")
         self.console_mgr.log("ERROR", "Could not extract a Wi-Fi IP address from wlan0.")
-        self.set_workflow_issue("The phone Wi-Fi address could not be detected.", "Turn on Wi-Fi for the phone, keep the USB cable connected, then try Auto get IP again.", self.get_device_ip, "Auto get IP")
+        self.set_workflow_issue(
+            "The phone Wi-Fi address could not be detected.",
+            "Turn on Wi-Fi for the phone, keep the USB connection active while fetching the address.",
+            self.get_device_ip, "Auto get IP"
+        )
         messagebox.showinfo("Info", "Could not automatically find IP.\nPlease check if Wi-Fi is connected on the phone.")
 
     def enable_tcpip(self):
@@ -1121,7 +1881,11 @@ class ScrcpyGUI:
         if not serial or serial == "No devices found":
             messagebox.showwarning("Error", "Select a device connected via USB first.")
             self.console_mgr.log("WARN", "Cannot enable TCP/IP without a selected USB device.")
-            self.set_workflow_issue("ADB over Wi-Fi cannot be enabled until a USB device is selected.", "Connect the phone over USB and scan devices first.", self.refresh_devices, "Scan devices")
+            self.set_workflow_issue(
+                "ADB over Wi-Fi cannot be enabled until a USB device is selected.",
+                "Connect the phone over USB and scan devices first.",
+                self.refresh_devices, "Scan Devices"
+            )
             return
         self.set_status("Enabling ADB over TCP/IP on port 5555...")
 
@@ -1133,7 +1897,7 @@ class ScrcpyGUI:
         self.adb.enable_tcpip(serial, on_success, on_error)
 
     def _enable_tcpip_success(self, serial):
-        messagebox.showinfo("Success", "Wi-Fi mode enabled.\n\nNow you can unplug USB and click 'Connect'.")
+        messagebox.showinfo("Success", "Wi-Fi mode enabled.\n\nNow you can unplug USB and click 'Connect Wirelessly'.")
         self.connection_summary_var.set("TCP/IP enabled on port 5555")
         self.set_status("Wi-Fi mode enabled on port 5555.")
         self.console_mgr.log("INFO", f"ADB TCP/IP enabled for {serial}.")
@@ -1144,43 +1908,33 @@ class ScrcpyGUI:
         self.set_status("Failed to enable Wi-Fi mode.")
         self.console_mgr.log("ERROR", "ADB TCP/IP mode could not be enabled.")
         self.workflow_tcpip_enabled = False
-        self.set_workflow_issue("ADB could not switch the phone into TCP/IP mode.", "Keep USB connected, confirm USB debugging is allowed, then try Enable TCP/IP again.", self.enable_tcpip, "Enable TCP/IP")
+        self.set_workflow_issue(
+            "ADB could not switch the phone into TCP/IP mode.",
+            "Keep USB connected, confirm USB debugging is allowed, then try Enable TCP/IP again.",
+            self.enable_tcpip, "Enable TCP/IP"
+        )
 
     def connect_wireless(self):
         ip = self.var_ip.get().strip()
         if not ip:
-            messagebox.showwarning("Error", "Please enter the Device IP address.")
-            self.console_mgr.log("WARN", "Wireless connect skipped because the IP field is empty.")
-            self.set_workflow_issue("A phone IP address is required before wireless ADB can connect.", "Use Auto get IP first, or type the phone's Wi-Fi IP manually.", self.get_device_ip, "Auto get IP")
+            messagebox.showwarning("Error", "Please enter the Device IP address first.")
             return
-        self.set_status(f"Connecting wirelessly to {ip}:5555...")
+        target = ip if ":" in ip else f"{ip}:5555"
+        self.set_status(f"Connecting wirelessly to {target}...")
 
         def on_success():
-            self.root.after(0, self._connect_wireless_success, ip)
+            self.root.after(0, self._connect_wireless_success, target)
         def on_error(reason):
-            self.root.after(0, self._connect_wireless_error, ip, reason)
+            self.root.after(0, self._connect_wireless_error, target, reason)
 
-        self.adb.connect_wireless(ip, on_success, on_error)
-
-    def toggle_wireless_method(self, method):
-        if method == "USB Assisted":
-            if hasattr(self, "direct_wireless_frame"):
-                self.direct_wireless_frame.pack_forget()
-            if hasattr(self, "usb_wireless_frame"):
-                self.usb_wireless_frame.pack(fill="x", padx=0, pady=0)
-        else:
-            if hasattr(self, "usb_wireless_frame"):
-                self.usb_wireless_frame.pack_forget()
-            if hasattr(self, "direct_wireless_frame"):
-                self.direct_wireless_frame.pack(fill="x", padx=0, pady=0)
+        self.adb.connect_wireless(target, on_success, on_error)
 
     def pair_wireless(self):
         ip = self.var_ip.get().strip()
         port = self.var_pair_port.get().strip()
         code = self.var_pair_code.get().strip()
-        
         if not ip:
-            messagebox.showwarning("Error", "Please enter the Device IP address.")
+            messagebox.showwarning("Error", "Please enter the Device IP address first.")
             return
         if not port:
             messagebox.showwarning("Error", "Please enter the Pairing Port.")
@@ -1188,25 +1942,15 @@ class ScrcpyGUI:
         if not code:
             messagebox.showwarning("Error", "Please enter the 6-digit Pairing Code.")
             return
-            
-        # Enforce that standard USB Debugging must also be enabled
-        usb_dbg_msg = (
-            "⚠️ MANDATORY REQUIREMENT:\n\n"
-            "To ensure that your phone can reconnect automatically in the future (even if Wireless Debugging gets turned OFF by Android), you MUST enable standard 'USB Debugging' in your phone's Developer Options alongside 'Wireless Debugging'.\n\n"
-            "Is standard 'USB Debugging' enabled on your phone right now?"
-        )
-        if not messagebox.askyesno("USB Debugging Required", usb_dbg_msg):
-            messagebox.showwarning("Pairing Paused", "Please go to Developer options, enable 'USB Debugging', and then click Pair Device again.")
-            return
-
+        
         ip_port = f"{ip}:{port}"
         self.set_status(f"Pairing wirelessly with {ip_port}...")
-        
+
         def on_success():
             self.root.after(0, self._pair_wireless_success, ip_port)
         def on_error(reason):
             self.root.after(0, self._pair_wireless_error, ip_port, reason)
-            
+
         self.adb.pair_wireless(ip_port, code, on_success, on_error)
         
     def _pair_wireless_success(self, ip_port):
@@ -1254,7 +1998,7 @@ class ScrcpyGUI:
     def _connect_wireless_success(self, ip):
         display_target = ip if ":" in ip else f"{ip}:5555"
         
-        # If it's a dynamic port, try to transition to port 5555 automatically!
+        # Try to transition dynamical port to port 5555 automatically
         if ":" in display_target and not display_target.endswith(":5555"):
             raw_ip = display_target.split(":")[0]
             self.set_status("Connected! Enabling stable TCP/IP port 5555...")
@@ -1306,7 +2050,11 @@ class ScrcpyGUI:
         self.set_status("Connection failed.")
         self.console_mgr.log("ERROR", f"Wireless connection to {display_target} failed.")
         self.workflow_wireless_ready = False
-        self.set_workflow_issue(f"Wireless ADB could not connect to {display_target}.", "Check that the phone and PC are on the same Wi-Fi and that the connection port is correct.", self.connect_wireless, "Connect Wi-Fi")
+        self.set_workflow_issue(
+            f"Wireless ADB could not connect to {display_target}.",
+            "Check that the phone and PC are on the same Wi-Fi and that the connection port is correct.",
+            self.connect_wireless, "Connect Wi-Fi"
+        )
         messagebox.showerror("Error", f"Failed to connect.\nADB says: {reason or 'No response'}")
 
     def auto_detect_port(self):
@@ -1355,7 +2103,6 @@ class ScrcpyGUI:
             "You can always enter the Connect Port manually from your phone's screen."
         )
         messagebox.showerror("Scan Failed", msg)
-
 
     def kill_adb_server(self):
         self.set_status("Stopping the ADB server...")
@@ -1418,9 +2165,15 @@ class ScrcpyGUI:
                 self.root.after(0, lambda: self.set_status(f"Mirroring exited with code {return_code}."))
         self.active_processes = [p for p in self.active_processes if p.poll() is None]
 
+
+    # --- SCRCPY LAUNCH PROCESS ---
     def start_scrcpy(self):
         if not self.device_combo.get() or self.device_combo.get() == "No devices found":
-            self.set_workflow_issue("Mirroring cannot start until a device is available.", "Scan for a USB device first, or finish the wireless connection flow before launching scrcpy.", self.refresh_devices, "Scan devices")
+            self.set_workflow_issue(
+                "Mirroring cannot start until a device is available.",
+                "Scan for a USB device first, or finish the wireless connection flow before launching scrcpy.",
+                self.refresh_devices, "Scan Devices"
+            )
             messagebox.showwarning("No Device", "Please select a device first.")
             return
 
@@ -1452,7 +2205,11 @@ class ScrcpyGUI:
         except Exception as e:
             self.set_status("Could not launch scrcpy.")
             self.console_mgr.log("ERROR", f"scrcpy failed before launch: {e}")
-            self.set_workflow_issue("scrcpy could not be launched from the current setup.", "Open the Console tab to review the exact error, then retry once the problem is fixed.", lambda: self.switch_tab("Console"), "Open Console")
+            self.set_workflow_issue(
+                "scrcpy could not be launched from the current setup.",
+                "Open the Console tab to review the exact error, then retry once the problem is fixed.",
+                lambda: self.switch_tab("Terminal Console"), "Open Console"
+            )
             messagebox.showerror("Execution Error", str(e))
 
     def check_for_updates(self):
@@ -1470,8 +2227,9 @@ class ScrcpyGUI:
             return
 
     def reveal_update_button(self, new_version):
-        self.btn_update.configure(text=f"Update available: v{new_version}")
-        self.btn_update.pack(fill="x", padx=18, pady=(0, 18), ipady=8)
+        if hasattr(self, "btn_update") and self.btn_update.winfo_exists():
+            self.btn_update.configure(text=f"Update available: v{new_version}")
+            self.btn_update.pack(fill="x", padx=18, pady=(0, 18), ipady=8)
 
     def open_download(self): webbrowser.open(DOWNLOAD_URL)
     def open_tutorial(self): webbrowser.open(TUTORIAL_URL)
@@ -1486,15 +2244,15 @@ class ScrcpyGUI:
             <!DOCTYPE html>
             <html><head><title>Donate to EXPOSUREEE</title><meta charset="UTF-8">
             <style>
-                body {{ background-color: #1e1e1e; color: #ffffff; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-                .card {{ background-color: #2d2d30; padding: 40px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; width: 350px; border-top: 5px solid #4a4a4a; }}
+                body {{ background-color: #0b0b0f; color: #ffffff; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+                .card {{ background-color: #161622; padding: 40px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); text-align: center; width: 350px; border: 1px solid #232333; }}
                 h1 {{ color: #ffffff; margin: 0 0 5px 0; font-size: 28px; letter-spacing: 1px; text-transform: uppercase; }}
-                h2 {{ color: #a0a0a0; margin: 0 0 25px 0; font-size: 16px; font-weight: normal; }}
+                h2 {{ color: #8b8b9f; margin: 0 0 25px 0; font-size: 16px; font-weight: normal; }}
                 .qr-box {{ background: white; padding: 15px; border-radius: 10px; display: inline-block; margin-bottom: 20px; }}
                 img {{ display: block; width: 100%; height: auto; }}
-                .label {{ font-size: 12px; color: #888; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }}
-                .upi-box {{ background: #3e3e42; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 16px; color: #fff; border: 1px solid #444; word-break: break-all; user-select: all; }}
-                .footer {{ color: #666; font-size: 13px; margin-top: 25px; line-height: 1.5; }}
+                .label {{ font-size: 12px; color: #8b8b9f; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; }}
+                .upi-box {{ background: #0d0d14; padding: 12px; border-radius: 6px; font-family: monospace; font-size: 16px; color: #8b5cf6; border: 1px solid #232333; word-break: break-all; user-select: all; }}
+                .footer {{ color: #8b8b9f; font-size: 13px; margin-top: 25px; line-height: 1.5; }}
             </style></head><body>
             <div class="card">
                 <h1>EXPOSUREEE</h1><h2>{PAYEE_NAME}</h2>
@@ -1560,368 +2318,6 @@ class ScrcpyGUI:
         config.save_config(self, self.config_file)
         self.refresh_saved_devices_ui()
 
-    def build_saved_devices_tab(self, parent):
-        self.saved_devices_scroll_frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
-        self.saved_devices_scroll_frame.pack(fill="both", expand=True, padx=6, pady=10)
-        self.refresh_saved_devices_ui()
-
-    def refresh_saved_devices_ui(self):
-        if not hasattr(self, "saved_devices_scroll_frame"):
-            return
-            
-        for widget in self.saved_devices_scroll_frame.winfo_children():
-            widget.destroy()
-            
-        if not getattr(self, "saved_devices", []):
-            empty_card = self.make_card(self.saved_devices_scroll_frame, "No Saved Devices Yet", "Devices will automatically save when plugged in over USB or connected wirelessly.")
-            empty_card.pack(fill="x", padx=6, pady=6)
-            return
-            
-        for dev in self.saved_devices:
-            dev_type = dev.get("type", "usb")
-            icon = "🔌" if dev_type == "usb" else "📶"
-            nickname = dev.get("nickname", "")
-            brand = dev.get("brand", "")
-            model = dev.get("model", "")
-            serial = dev.get("serial", "")
-            ip = dev.get("ip", "")
-            
-            title = nickname if nickname else f"{brand} {model}".strip() or f"Android Device"
-            subtitle = f"{brand} {model}".strip() if nickname else ""
-            
-            card = ctk.CTkFrame(self.saved_devices_scroll_frame, fg_color=CARD_BG, border_color=BORDER, border_width=1, corner_radius=10)
-            card.pack(fill="x", padx=6, pady=6)
-            
-            left_frame = ctk.CTkFrame(card, fg_color="transparent")
-            left_frame.pack(side="left", fill="both", expand=True, padx=16, pady=12)
-            
-            icon_lbl = ctk.CTkLabel(left_frame, text=icon, font=self.fonts["section"], width=32)
-            icon_lbl.pack(side="left", padx=(0, 12))
-            
-            info_subframe = ctk.CTkFrame(left_frame, fg_color="transparent")
-            info_subframe.pack(side="left", fill="y", expand=True)
-            
-            title_lbl = ctk.CTkLabel(info_subframe, text=title, font=self.fonts["body_bold"], text_color=TEXT, anchor="w")
-            title_lbl.pack(anchor="w")
-            
-            sub_lbl_text = ""
-            if dev_type == "wireless":
-                sub_lbl_text = f"IP: {ip}"
-                if subtitle:
-                    sub_lbl_text = f"{subtitle} • IP: {ip}"
-            else:
-                sub_lbl_text = f"USB Serial: {serial}"
-                if subtitle:
-                    sub_lbl_text = f"{subtitle} • Serial: {serial}"
-                    
-            sub_lbl = ctk.CTkLabel(info_subframe, text=sub_lbl_text, font=self.fonts["caption"], text_color=MUTED_TEXT, anchor="w")
-            sub_lbl.pack(anchor="w", pady=(2, 0))
-            
-            right_frame = ctk.CTkFrame(card, fg_color="transparent")
-            right_frame.pack(side="right", padx=16, pady=12)
-            
-            remove_btn = self.make_action_button(right_frame, "❌", lambda d=dev: self.remove_saved_device(d), width=40, fg_color="#bf3b3b", hover_color="#9e2e2e")
-            remove_btn.pack(side="right", padx=(8, 0))
-            
-            edit_btn = self.make_action_button(right_frame, "✏️ Edit", lambda d=dev: self.edit_saved_device(d), width=70)
-            edit_btn.pack(side="right", padx=(8, 0))
-            
-            connect_btn = self.make_action_button(right_frame, "⚡ Connect", lambda d=dev: self.connect_saved_device(d), width=100, fg_color=ACCENT, hover_color=ACCENT_HOVER)
-            connect_btn.pack(side="right")
-
-    def connect_saved_device(self, dev):
-        dev_type = dev.get("type", "usb")
-        if dev_type == "usb":
-            serial = dev.get("serial")
-            name = dev.get("nickname") or dev.get("display_name")
-            
-            def check_presence(devices):
-                # Update maps and UI combo first with the refreshed list of devices
-                self._refresh_devices_success(devices)
-                
-                found = None
-                for d in devices:
-                    if d.serial == serial:
-                        found = d
-                        break
-                if found:
-                    label = self.device_serial_to_label.get(serial)
-                    if label:
-                        self.device_combo.set(label)
-                    else:
-                        label = found.display_name
-                        self.device_combo.set(label)
-                    
-                    self.set_status(f"Found saved USB device: {name}. Launching scrcpy...")
-                    self.start_scrcpy()
-                else:
-                    self.set_status(f"Saved USB device not found: {name}")
-                    messagebox.showwarning(
-                        "Device Not Found",
-                        f"The saved USB device '{name}' is not currently connected to the computer.\n\nPlease check the USB connection and ensure USB debugging is enabled on the device."
-                    )
-            
-            self.set_status("Scanning connected devices to find USB target...")
-            self.adb.refresh_devices(
-                lambda list_devs: self.root.after(0, check_presence, list_devs),
-                lambda err: self.root.after(0, lambda: messagebox.showwarning("Scan Failed", f"Could not scan devices: {err}"))
-            )
-            
-        elif dev_type == "wireless":
-            ip = dev.get("ip")
-            hw_serial = dev.get("hardware_serial", "")
-            name = dev.get("nickname") or dev.get("display_name")
-            
-            def auto_select_wireless_helper(devices, resolved_ip, target_port=None):
-                # Update maps and UI combo first with the refreshed list of devices
-                self._refresh_devices_success(devices)
-                target_serial = f"{resolved_ip}:{target_port}" if target_port else f"{resolved_ip}:5555"
-                found = None
-                for d in devices:
-                    if d.serial == target_serial or d.serial.startswith(f"{resolved_ip}:"):
-                        found = d
-                        break
-                if found:
-                    label = self.device_serial_to_label.get(found.serial)
-                    if label:
-                        self.device_combo.set(label)
-                    else:
-                        self.device_combo.set(found.display_name)
-                    self.start_scrcpy()
-                else:
-                    self.start_scrcpy()
-
-            def on_serial_resolved(endpoints):
-                # We found the device on the network via mDNS!
-                # We have stable (port 5555) or dynamic resolved endpoints.
-                # Let's prefer stable if it exists, otherwise fall back to dynamic!
-                resolved_endpoint = endpoints.get("stable") or endpoints.get("dynamic")
-                if resolved_endpoint:
-                    res_ip, res_port = resolved_endpoint
-                    self.console_mgr.log("INFO", f"mDNS resolved {name} (serial {hw_serial}) to {res_ip}:{res_port}")
-                    
-                    # Update stored IP and serial in dev dictionary and save config
-                    dev["ip"] = res_ip
-                    dev["serial"] = f"{res_ip}:{res_port}"
-                    config.save_config(self, self.config_file)
-                    
-                    # Update connection entries in input fields
-                    self.var_ip.set(res_ip)
-                    self.var_connect_port.set(res_port)
-                    
-                    self.switch_tab("Connection")
-                    self.set_status(f"Connecting to resolved {res_ip}:{res_port}...")
-                    
-                    def on_res_connect_success():
-                        self.set_status(f"Connected to {name} at {res_ip}:{res_port}!")
-                        
-                        # If it's a dynamic port, promote to stable 5555 automatically
-                        if res_port != "5555":
-                            self.set_status("Connected! Enabling stable TCP/IP port 5555...")
-                            
-                            def on_tcpip_success():
-                                self.console_mgr.log("INFO", f"TCP/IP enabled on port 5555 for {res_ip}. Connecting to stable port...")
-                                
-                                def on_stable_connect():
-                                    self.set_status(f"Successfully connected to {name} on stable port 5555!")
-                                    dev["ip"] = res_ip
-                                    dev["serial"] = f"{res_ip}:5555"
-                                    config.save_config(self, self.config_file)
-                                    self.adb.refresh_devices(
-                                        lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, "5555"),
-                                        lambda err: self.root.after(0, self.start_scrcpy)
-                                    )
-                                    
-                                def on_stable_error(err_fb):
-                                    self.console_mgr.log("WARN", f"Could not connect to stable port 5555: {err_fb}. Remaining on dynamic port.")
-                                    self.adb.refresh_devices(
-                                        lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, res_port),
-                                        lambda err: self.root.after(0, self.start_scrcpy)
-                                    )
-                                    
-                                self.adb.connect_wireless(f"{res_ip}:5555",
-                                    lambda: self.root.after(0, on_stable_connect),
-                                    lambda err: self.root.after(0, on_stable_error, err)
-                                )
-                                
-                            def on_tcpip_error():
-                                self.console_mgr.log("WARN", f"Could not enable TCP/IP on port 5555 for {res_ip}. Proceeding on dynamic port.")
-                                self.adb.refresh_devices(
-                                    lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, res_port),
-                                    lambda err: self.root.after(0, self.start_scrcpy)
-                                )
-                                
-                            self.adb.enable_tcpip(f"{res_ip}:{res_port}",
-                                lambda: self.root.after(0, on_tcpip_success),
-                                lambda: self.root.after(0, on_tcpip_error)
-                            )
-                        else:
-                            self.adb.refresh_devices(
-                                lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, "5555"),
-                                lambda err: self.root.after(0, self.start_scrcpy)
-                            )
-                            
-                    def on_res_connect_error(err_msg):
-                        self.set_status(f"Wireless connection to {name} failed.")
-                        messagebox.showerror(
-                            "Connection Failed",
-                            f"Could not connect to {res_ip}:{res_port}.\n\nError: {err_msg}\n\nPlease check if 'Wireless Debugging' or 'USB Debugging' with TCP/IP is active on your phone."
-                        )
-                        
-                    self.adb.connect_wireless(f"{res_ip}:{res_port}",
-                        lambda: self.root.after(0, on_res_connect_success),
-                        lambda err: self.root.after(0, on_res_connect_error, err)
-                    )
-                else:
-                    on_serial_error("No endpoints resolved.")
-                    
-            def on_serial_error(err):
-                # Fallback to the saved IP address and standard port discovery
-                self.console_mgr.log("WARN", f"Could not resolve device {name} via hardware serial: {err}. Falling back to saved IP: {ip}...")
-                trigger_ip_fallback()
-
-            def trigger_ip_fallback():
-                self.set_status(f"Resolving wireless connection port for {name} ({ip})...")
-                
-                def auto_select_wireless(devices, target_port=None):
-                    self._refresh_devices_success(devices)
-                    target_serial = f"{ip}:{target_port}" if target_port else f"{ip}:5555"
-                    found = None
-                    for d in devices:
-                        if d.serial == target_serial or d.serial.startswith(f"{ip}:"):
-                            found = d
-                            break
-                    if found:
-                        label = self.device_serial_to_label.get(found.serial)
-                        if label:
-                            self.device_combo.set(label)
-                        else:
-                            self.device_combo.set(found.display_name)
-                        self.start_scrcpy()
-                    else:
-                        self.start_scrcpy()
-
-                def on_mdns_discovered(services):
-                    port = services.get(ip)
-                    if port:
-                        self.console_mgr.log("INFO", f"mDNS resolved port {port} for IP {ip}")
-                        self.switch_tab("Connection")
-                        self.var_ip.set(f"{ip}:{port}")
-                        self.set_status(f"Connecting to {ip}:{port}...")
-                        
-                        def on_connect_success():
-                            self.set_status("Connected! Enabling stable TCP/IP port 5555...")
-                            
-                            def on_tcpip_success():
-                                self.console_mgr.log("INFO", f"TCP/IP enabled on port 5555 for {ip}. Connecting to stable port...")
-                                
-                                def on_stable_connect():
-                                    self.set_status(f"Successfully connected to {name} on stable port 5555!")
-                                    self.adb.refresh_devices(
-                                        lambda l: self.root.after(0, auto_select_wireless, l, "5555"),
-                                        lambda err: self.root.after(0, self.start_scrcpy)
-                                    )
-                                    
-                                def on_stable_error(err_fb):
-                                    self.console_mgr.log("WARN", f"Could not connect to stable port 5555: {err_fb}. Falling back to dynamic port.")
-                                    self.adb.refresh_devices(
-                                        lambda l: self.root.after(0, auto_select_wireless, l, port),
-                                        lambda err: self.root.after(0, self.start_scrcpy)
-                                    )
-                                    
-                                self.adb.connect_wireless(f"{ip}:5555",
-                                    lambda: self.root.after(0, on_stable_connect),
-                                    lambda err: self.root.after(0, on_stable_error, err)
-                                )
-                                
-                            def on_tcpip_error():
-                                self.console_mgr.log("WARN", f"Could not enable TCP/IP on port 5555 for {ip}. Proceeding on dynamic port.")
-                                self.adb.refresh_devices(
-                                    lambda l: self.root.after(0, auto_select_wireless, l, port),
-                                    lambda err: self.root.after(0, self.start_scrcpy)
-                                )
-                                
-                            self.adb.enable_tcpip(f"{ip}:{port}",
-                                lambda: self.root.after(0, on_tcpip_success),
-                                lambda: self.root.after(0, on_tcpip_error)
-                            )
-                            
-                        def on_connect_error(err_msg):
-                            self.set_status(f"Wireless connection to {name} failed.")
-                            messagebox.showerror(
-                                "Connection Failed",
-                                f"Could not connect to {ip}:{port}.\n\nError: {err_msg}\n\nPlease check if Wireless debugging is enabled on your phone and connected to the same Wi-Fi network."
-                            )
-                        
-                        self.adb.connect_wireless(f"{ip}:{port}", 
-                            lambda: self.root.after(0, on_connect_success),
-                            lambda err: self.root.after(0, on_connect_error, err)
-                        )
-                    else:
-                        self.console_mgr.log("WARN", f"Could not resolve port for {ip} via mDNS. Retrying on port 5555...")
-                        self.switch_tab("Connection")
-                        self.var_ip.set(f"{ip}:5555")
-                        self.set_status(f"Connecting to {ip}:5555...")
-                        
-                        def on_connect_success_fb():
-                            self.set_status(f"Successfully connected to {name} on port 5555!")
-                            self.adb.refresh_devices(
-                                lambda l: self.root.after(0, auto_select_wireless, l, "5555"),
-                                lambda err: self.root.after(0, self.start_scrcpy)
-                            )
-                            
-                        def on_connect_error_fb(err_msg):
-                            self.set_status(f"Wireless connection to {name} failed.")
-                            messagebox.showerror(
-                                "Connection Failed",
-                                f"Could not connect to {ip} via dynamic port (mDNS) or fallback port 5555.\n\nPlease ensure 'Wireless Debugging' is enabled on your phone. \nAlso Connect the both devices with same wifi."
-                            )
-                            
-                        self.adb.connect_wireless(f"{ip}:5555", 
-                            lambda: self.root.after(0, on_connect_success_fb),
-                            lambda err: self.root.after(0, on_connect_error_fb, err)
-                        )
-                        
-                def on_mdns_error(err):
-                    self.console_mgr.log("WARN", f"mDNS discovery error: {err}. Trying default port 5555...")
-                    self.switch_tab("Connection")
-                    self.var_ip.set(f"{ip}:5555")
-                    self.set_status(f"Connecting to {ip}:5555...")
-                    
-                    def on_connect_success_fb():
-                        self.set_status(f"Successfully connected to {name} on port 5555!")
-                        self.adb.refresh_devices(
-                            lambda l: self.root.after(0, auto_select_wireless, l, "5555"),
-                            lambda err: self.root.after(0, self.start_scrcpy)
-                        )
-                    
-                    def on_connect_error_fb(err_msg):
-                        self.set_status(f"Wireless connection to {name} failed.")
-                        messagebox.showerror(
-                            "Connection Failed",
-                            f"Could not connect to {ip}:5555.\n\nError: {err_msg}\n\nPlease check if 'Wireless Debugging' is enabled."
-                        )
-                        
-                    self.adb.connect_wireless(f"{ip}:5555", 
-                        lambda: self.root.after(0, on_connect_success_fb),
-                        lambda err: self.root.after(0, on_connect_error_fb, err)
-                    )
-                    
-                self.adb.discover_mdns_ports(
-                    lambda srv: self.root.after(0, on_mdns_discovered, srv),
-                    lambda err: self.root.after(0, on_mdns_error, err)
-                )
-
-            if hw_serial:
-                self.set_status(f"Scanning local network for {name} ({hw_serial})...")
-                self.adb.resolve_device_by_serial(
-                    hw_serial,
-                    lambda endps: self.root.after(0, on_serial_resolved, endps),
-                    lambda err: self.root.after(0, on_serial_error, err)
-                )
-            else:
-                trigger_ip_fallback()
-
     def edit_saved_device(self, dev):
         def on_save(new_nick, new_ip):
             dev["nickname"] = new_nick
@@ -1948,72 +2344,45 @@ class ScrcpyGUI:
             self.refresh_saved_devices_ui()
             self.console_mgr.log("INFO", f"Removed device from saved list: {name}")
 
+    def connect_saved_device(self, dev):
+        dev_type = dev.get("type", "usb")
+        if dev_type == "usb":
+            serial = dev.get("serial")
+            name = dev.get("nickname") or dev.get("display_name")
+            
+            def check_presence(devices):
+                self._refresh_devices_success(devices)
+                if serial in self.device_serial_to_label:
+                    label = self.device_serial_to_label[serial]
+                    self.device_combo.set(label)
+                    self.refresh_dashboard_state()
+                    self.set_status(f"Selected USB device: {name}")
+                else:
+                    messagebox.showerror("Error", f"USB Device '{name}' is not physically connected.")
+                    self.console_mgr.log("WARN", f"Saved USB device {serial} not found in live scan.")
+                    
+            self.adb.refresh_devices(
+                lambda devs: self.root.after(0, check_presence, devs),
+                lambda err: self.root.after(0, lambda: messagebox.showerror("Scan Error", "Failed to scan devices."))
+            )
+        else:
+            ip = dev.get("ip")
+            port = dev.get("serial", "").split(":")[1] if ":" in dev.get("serial", "") else "5555"
+            ip_port = f"{ip}:{port}"
+            self.set_status(f"Connecting to saved device {ip_port}...")
+            
+            def on_success():
+                self.root.after(0, self._connect_wireless_success, ip_port)
+            def on_error(reason):
+                self.root.after(0, self._connect_wireless_error, ip_port, reason)
+                
+            self.adb.connect_wireless(ip_port, on_success, on_error)
 
-class SavedDeviceDialog(ctk.CTkToplevel):
-    def __init__(self, parent, device, on_save):
-        super().__init__(parent.root)
-        self.device = device
-        self.on_save = on_save
-        
-        self.title("Edit Saved Device")
-        self.configure(fg_color=SHELL_BG)
-        
-        self.width = 400
-        self.height = 300 if device.get("type") == "wireless" else 240
-        self.geometry(f"{self.width}x{self.height}")
-        self.resizable(False, False)
-        
-        self.transient(parent.root)
-        self.grab_set()
-        
-        parent_x = parent.root.winfo_rootx()
-        parent_y = parent.root.winfo_rooty()
-        parent_w = parent.root.winfo_width()
-        parent_h = parent.root.winfo_height()
-        
-        x = parent_x + (parent_w - self.width) // 2
-        y = parent_y + (parent_h - self.height) // 2
-        self.geometry(f"+{x}+{y}")
-        
-        title_label = ctk.CTkLabel(self, text="Edit Device Details", font=parent.fonts["section"], text_color=TEXT)
-        title_label.pack(fill="x", padx=24, pady=(20, 10))
-        
-        nick_frame = ctk.CTkFrame(self, fg_color="transparent")
-        nick_frame.pack(fill="x", padx=24, pady=8)
-        
-        nick_label = ctk.CTkLabel(nick_frame, text="Nickname", font=parent.fonts["body_bold"], text_color=MUTED_TEXT)
-        nick_label.pack(anchor="w", pady=(0, 4))
-        
-        self.nick_entry = ctk.CTkEntry(nick_frame, fg_color=FIELD_BG, border_color=BORDER, text_color=TEXT, placeholder_text="e.g. Primary Phone", corner_radius=8, height=40, font=parent.fonts["body"])
-        self.nick_entry.pack(fill="x")
-        self.nick_entry.insert(0, device.get("nickname", ""))
-        
-        self.ip_entry = None
-        if device.get("type") == "wireless":
-            ip_frame = ctk.CTkFrame(self, fg_color="transparent")
-            ip_frame.pack(fill="x", padx=24, pady=8)
-            
-            ip_label = ctk.CTkLabel(ip_frame, text="IP Address", font=parent.fonts["body_bold"], text_color=MUTED_TEXT)
-            ip_label.pack(anchor="w", pady=(0, 4))
-            
-            self.ip_entry = ctk.CTkEntry(ip_frame, fg_color=FIELD_BG, border_color=BORDER, text_color=TEXT, corner_radius=8, height=40, font=parent.fonts["body"])
-            self.ip_entry.pack(fill="x")
-            self.ip_entry.insert(0, device.get("ip", ""))
-            
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=24, pady=(20, 10), side="bottom")
-        
-        cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", width=100, height=38, command=self.destroy, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=8, font=parent.fonts["button"])
-        cancel_btn.pack(side="left", padx=(0, 10))
-        
-        save_btn = ctk.CTkButton(btn_frame, text="Save Changes", height=38, command=self.save, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=TEXT, corner_radius=8, font=parent.fonts["button"])
-        save_btn.pack(side="right", fill="x", expand=True)
-        
-        self.nick_entry.focus()
-        
-    def save(self):
-        new_nick = self.nick_entry.get().strip()
-        new_ip = self.ip_entry.get().strip() if self.ip_entry else None
-        
-        self.on_save(new_nick, new_ip)
-        self.destroy()
+    def update_card_text_wrap(self, card_width, title_widget, subtitle_widget=None):
+        pad = 40
+        if title_widget and title_widget.winfo_exists():
+            try: title_widget.configure(wraplength=max(100, card_width - pad))
+            except Exception: pass
+        if subtitle_widget and subtitle_widget.winfo_exists():
+            try: subtitle_widget.configure(wraplength=max(100, card_width - pad))
+            except Exception: pass
