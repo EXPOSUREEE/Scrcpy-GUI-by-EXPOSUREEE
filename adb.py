@@ -2,6 +2,7 @@ import subprocess
 import threading
 import re
 import os
+import time
 
 class AdbManager:
     def __init__(self, adb_exe, script_dir, console_mgr):
@@ -87,6 +88,7 @@ class AdbManager:
                             info.device = part.split(":", 1)[1]
                             
                     props_to_fetch = {
+                        "ro.serialno": "hardware_serial",
                         "ro.product.manufacturer": "manufacturer",
                         "ro.product.brand": "brand",
                         "ro.product.model": "model",
@@ -122,6 +124,10 @@ class AdbManager:
                         except Exception:
                             pass
                             
+                    if not getattr(info, "hardware_serial", ""):
+                        if info.transport == "usb":
+                            info.hardware_serial = info.serial
+
                     build_display_name(info, mapping)
                     self.console.log("INFO", f"Detected device: {info.display_name} [serial: {info.serial[:6]}...]")
                     device_infos.append(info)
@@ -161,7 +167,10 @@ class AdbManager:
             result = self.run_cmd_sync(["connect", target], context=f"Wireless connect to {target}")
             output = result.stdout.strip() if result else ""
             combined = " ".join(part for part in [output, result.stderr.strip() if result else ""] if part)
-            if result and result.returncode == 0 and "connected" in combined.lower():
+            lowered = combined.lower()
+            
+            # Robust verification of connection success
+            if result and result.returncode == 0 and ("connected to" in lowered or "already connected" in lowered) and not ("failed" in lowered or "cannot" in lowered or "unable" in lowered):
                 on_success()
             else:
                 on_error(combined)
@@ -226,18 +235,71 @@ class AdbManager:
 
     def discover_mdns_ports(self, on_success, on_error):
         def task():
-            result = self.run_cmd_sync(["mdns", "services"], context="ADB mdns services")
-            output = result.stdout.strip() if result else ""
-            if result and result.returncode == 0 and output:
-                found = {}
-                for line in output.splitlines():
-                    if "_adb-tls-connect._tcp" in line:
-                        match = re.search(r'(\d+\.\d+\.\d+\.\d+):(\d+)', line)
-                        if match:
-                            ip, port = match.groups()
-                            found[ip] = port
-                on_success(found)
-            else:
-                on_error(output or "No active discovered services.")
+            last_output = "No scan performed."
+            for attempt in range(1, 6):
+                self.console.log("INFO", f"Scanning local network for dynamic wireless ports (Attempt {attempt}/5)...")
+                result = self.run_cmd_sync(["mdns", "services"], context=f"ADB mdns services attempt {attempt}")
+                output = result.stdout.strip() if result else ""
+                last_output = output or last_output
+                
+                if result and result.returncode == 0 and output:
+                    found = {}
+                    for line in output.splitlines():
+                        if "_adb-tls-connect._tcp" in line:
+                            match = re.search(r'(\d+\.\d+\.\d+\.\d+):(\d+)', line)
+                            if match:
+                                ip, port = match.groups()
+                                found[ip] = port
+                    if found:
+                        self.console.log("INFO", f"mDNS discovery succeeded on attempt {attempt}.")
+                        on_success(found)
+                        return
+                
+                if attempt < 5:
+                    self.console.log("WARN", f"No active dynamic wireless debugging services found in mDNS scan. Retrying in 1.5s (Attempt {attempt}/5)...")
+                    time.sleep(1.5)
+            
+            self.console.log("ERROR", "mDNS service discovery failed after 5 attempts.")
+            on_error(last_output or "No active discovered services after 5 attempts.")
+        threading.Thread(target=task, daemon=True).start()
+
+    def resolve_device_by_serial(self, hardware_serial, on_success, on_error):
+        def task():
+            if not hardware_serial:
+                on_error("No hardware serial provided.")
+                return
+            
+            last_output = "No scan performed."
+            target_token = f"adb-{hardware_serial.lower()}"
+            
+            for attempt in range(1, 6):
+                self.console.log("INFO", f"Scanning local network for hardware serial '{hardware_serial}' (Attempt {attempt}/5)...")
+                result = self.run_cmd_sync(["mdns", "services"], context=f"ADB mdns services attempt {attempt}")
+                output = result.stdout.strip() if result else ""
+                last_output = output or last_output
+                
+                if result and result.returncode == 0 and output:
+                    resolved = {}
+                    for line in output.splitlines():
+                        line_lower = line.lower()
+                        if target_token in line_lower:
+                            match = re.search(r'(\d+\.\d+\.\d+\.\d+):(\d+)', line)
+                            if match:
+                                ip, port = match.groups()
+                                if "_adb-tls-connect._tcp" in line:
+                                    resolved["dynamic"] = (ip, port)
+                                elif "_adb._tcp" in line:
+                                    resolved["stable"] = (ip, port)
+                    if resolved:
+                        self.console.log("INFO", f"mDNS serial resolution succeeded on attempt {attempt} for {hardware_serial}.")
+                        on_success(resolved)
+                        return
+                
+                if attempt < 5:
+                    self.console.log("WARN", f"Device '{hardware_serial}' not found in mDNS scan. Retrying in 1.5s (Attempt {attempt}/5)...")
+                    time.sleep(1.5)
+            
+            self.console.log("ERROR", f"mDNS serial resolution failed for {hardware_serial} after 5 attempts.")
+            on_error("Device not found in mDNS scan after 5 attempts.")
         threading.Thread(target=task, daemon=True).start()
 

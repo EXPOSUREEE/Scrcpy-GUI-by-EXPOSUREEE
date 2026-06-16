@@ -500,8 +500,18 @@ class ScrcpyGUI:
         btn.configure(command=toggle)
         return container, inner_frame
 
-    def make_action_button(self, parent, text, command, width=132):
-        return ctk.CTkButton(parent, text=text, width=width, height=38, command=command, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=8, font=self.fonts["button"])
+    def make_action_button(self, parent, text, command, width=132, **kwargs):
+        defaults = {
+            "fg_color": FIELD_BG,
+            "hover_color": CARD_HOVER,
+            "border_color": BORDER,
+            "border_width": 1,
+            "text_color": TEXT,
+            "corner_radius": 8,
+            "font": self.fonts["button"]
+        }
+        defaults.update(kwargs)
+        return ctk.CTkButton(parent, text=text, width=width, height=38, command=command, **defaults)
 
     def make_input(self, parent, **kwargs):
         return ctk.CTkEntry(parent, fg_color=FIELD_BG, border_color=BORDER, text_color=TEXT, placeholder_text_color=MUTED_TEXT, corner_radius=8, height=40, font=self.fonts["body"], **kwargs)
@@ -559,7 +569,7 @@ class ScrcpyGUI:
         nav = ctk.CTkFrame(sidebar, fg_color="transparent")
         nav.pack(fill="x", padx=14, pady=(10, 0))
         self.sidebar_nav_buttons = {}
-        for tab in ["Connection", "Video & Audio", "Advanced", "Console", "Tutorials"]:
+        for tab in ["Connection", "Saved Devices", "Video & Audio", "Advanced", "Console", "Tutorials"]:
             btn = self.make_sidebar_button(nav, tab, lambda t=tab: self.switch_tab(t), active=(tab=="Connection"))
             btn.pack(fill="x", pady=4)
             self.sidebar_nav_buttons[tab] = btn
@@ -596,9 +606,10 @@ class ScrcpyGUI:
 
         self.tabview = ctk.CTkTabview(workspace, fg_color=PANEL_BG, segmented_button_fg_color=FIELD_BG, segmented_button_selected_color=ACCENT, segmented_button_selected_hover_color=ACCENT_HOVER, segmented_button_unselected_color=FIELD_BG, segmented_button_unselected_hover_color=CARD_HOVER, text_color=TEXT, corner_radius=12, border_width=0, command=self.sync_sidebar_tab_state)
         self.tabview.pack(fill="both", expand=True, padx=18, pady=(0, 18))
-        for tab in ["Connection", "Video & Audio", "Advanced", "Console", "Tutorials"]: self.tabview.add(tab)
+        for tab in ["Connection", "Saved Devices", "Video & Audio", "Advanced", "Console", "Tutorials"]: self.tabview.add(tab)
 
         self.build_connection_tab(self.tabview.tab("Connection"))
+        self.build_saved_devices_tab(self.tabview.tab("Saved Devices"))
         self.build_video_tab(self.tabview.tab("Video & Audio"))
         self.build_advanced_tab(self.tabview.tab("Advanced"))
         self.build_console_tab(self.tabview.tab("Console"))
@@ -915,9 +926,10 @@ class ScrcpyGUI:
         tips = self.make_card(canvas, "Connection Notes", "A short checklist so the wireless flow stays predictable.")
         tips.pack(fill="x", padx=6)
         notes = [
+            "Keep both 'USB debugging' and 'Wireless debugging' turned ON inside Developer options.",
+            "USB debugging is REQUIRED for the one-click dynamic-to-stable TCP/IP (port 5555) connection fallback to succeed.",
             "Keep the phone unlocked for the first authorization prompt.",
             "If no IP is found, verify the device is on Wi-Fi and still trusted over USB.",
-            "Wireless mode typically uses port 5555 unless you changed it manually.",
             "Use Reset pairing when you want ADB to forget this computer and force a fresh authorization flow.",
         ]
         for note in notes:
@@ -1041,6 +1053,7 @@ class ScrcpyGUI:
             display_names.append(label)
             self.device_label_to_serial[label] = d.serial
             self.device_serial_to_label[d.serial] = label
+            self.auto_save_device(d)
 
         preferred_wireless_serial = f"{self.var_ip.get().strip()}:5555" if self.var_ip.get().strip() else ""
         selected_serial = preferred_wireless_serial if preferred_wireless_serial in self.device_serial_to_label else devices[0].serial
@@ -1176,6 +1189,16 @@ class ScrcpyGUI:
             messagebox.showwarning("Error", "Please enter the 6-digit Pairing Code.")
             return
             
+        # Enforce that standard USB Debugging must also be enabled
+        usb_dbg_msg = (
+            "⚠️ MANDATORY REQUIREMENT:\n\n"
+            "To ensure that your phone can reconnect automatically in the future (even if Wireless Debugging gets turned OFF by Android), you MUST enable standard 'USB Debugging' in your phone's Developer Options alongside 'Wireless Debugging'.\n\n"
+            "Is standard 'USB Debugging' enabled on your phone right now?"
+        )
+        if not messagebox.askyesno("USB Debugging Required", usb_dbg_msg):
+            messagebox.showwarning("Pairing Paused", "Please go to Developer options, enable 'USB Debugging', and then click Pair Device again.")
+            return
+
         ip_port = f"{ip}:{port}"
         self.set_status(f"Pairing wirelessly with {ip_port}...")
         
@@ -1189,7 +1212,18 @@ class ScrcpyGUI:
     def _pair_wireless_success(self, ip_port):
         self.set_status(f"Successfully paired with {ip_port}!")
         self.console_mgr.log("INFO", f"Successfully paired with {ip_port}.")
-        messagebox.showinfo("Success", f"Successfully paired with {ip_port}!\n\nNow, close the pairing dialog on your phone, find the active connection 'IP address & Port', enter the port in the Connect Port field, and click Connect.")
+        
+        success_msg = (
+            f"Successfully paired with {ip_port}!\n\n"
+            "Next Steps:\n"
+            "1. Close the pairing dialog on your phone.\n"
+            "2. Find the active connection 'IP address & Port' under Wireless debugging on your phone.\n"
+            "3. Enter that port in the Connect Port field, and click Connect.\n\n"
+            "⚠️ CRITICAL REMINDER:\n"
+            "Please ensure that standard 'USB Debugging' remains ENABLED in your phone's Developer Options alongside 'Wireless Debugging'.\n"
+            "This is required so that the fallback TCP/IP (port 5555) connection works seamlessly next time Wireless Debugging is turned off!"
+        )
+        messagebox.showinfo("Success", success_msg)
         self.clear_workflow_issue()
         
     def _pair_wireless_error(self, ip_port, reason):
@@ -1219,11 +1253,52 @@ class ScrcpyGUI:
 
     def _connect_wireless_success(self, ip):
         display_target = ip if ":" in ip else f"{ip}:5555"
-        self.connection_summary_var.set(f"Wireless ADB linked to {display_target}")
-        self.set_status(f"Successfully connected to {display_target}")
-        self.workflow_wireless_ready = True
-        self.clear_workflow_issue()
-        self.refresh_devices()
+        
+        # If it's a dynamic port, try to transition to port 5555 automatically!
+        if ":" in display_target and not display_target.endswith(":5555"):
+            raw_ip = display_target.split(":")[0]
+            self.set_status("Connected! Enabling stable TCP/IP port 5555...")
+            
+            def on_tcpip_success():
+                self.console_mgr.log("INFO", f"TCP/IP enabled on port 5555 for {raw_ip}. Transitioning connection...")
+                
+                def on_stable_connect():
+                    self.set_status(f"Successfully connected to stable port {raw_ip}:5555!")
+                    self.var_connect_port.set("5555")
+                    self.connection_summary_var.set(f"Wireless ADB linked to {raw_ip}:5555")
+                    self.workflow_wireless_ready = True
+                    self.clear_workflow_issue()
+                    self.refresh_devices()
+                    
+                def on_stable_error(err):
+                    self.console_mgr.log("WARN", f"Could not transition to port 5555: {err}. Remaining on dynamic port.")
+                    self.connection_summary_var.set(f"Wireless ADB linked to {display_target}")
+                    self.workflow_wireless_ready = True
+                    self.clear_workflow_issue()
+                    self.refresh_devices()
+                    
+                self.adb.connect_wireless(f"{raw_ip}:5555",
+                    lambda: self.root.after(0, on_stable_connect),
+                    lambda err: self.root.after(0, on_stable_error, err)
+                )
+                
+            def on_tcpip_error():
+                self.console_mgr.log("WARN", f"Could not enable TCP/IP on port 5555 for {raw_ip}. Remaining on dynamic port.")
+                self.connection_summary_var.set(f"Wireless ADB linked to {display_target}")
+                self.workflow_wireless_ready = True
+                self.clear_workflow_issue()
+                self.refresh_devices()
+                
+            self.adb.enable_tcpip(display_target,
+                lambda: self.root.after(0, on_tcpip_success),
+                lambda: self.root.after(0, on_tcpip_error)
+            )
+        else:
+            self.connection_summary_var.set(f"Wireless ADB linked to {display_target}")
+            self.set_status(f"Successfully connected to {display_target}")
+            self.workflow_wireless_ready = True
+            self.clear_workflow_issue()
+            self.refresh_devices()
 
     def _connect_wireless_error(self, ip, reason):
         display_target = ip if ":" in ip else f"{ip}:5555"
@@ -1334,9 +1409,13 @@ class ScrcpyGUI:
         summary = f"{context} exited with code {return_code}."
         if return_code == 0:
             self.append_console(summary, "INFO")
+            if context == "scrcpy":
+                self.root.after(0, lambda: self.set_status("Mirroring stopped."))
         else:
             self.append_console(summary, "ERROR")
             self.console_mgr.log_hint_for_message(summary)
+            if context == "scrcpy":
+                self.root.after(0, lambda: self.set_status(f"Mirroring exited with code {return_code}."))
         self.active_processes = [p for p in self.active_processes if p.poll() is None]
 
     def start_scrcpy(self):
@@ -1430,3 +1509,511 @@ class ScrcpyGUI:
             webbrowser.open('file://' + temp_path)
         except Exception as e:
             messagebox.showerror("Error", f"Could not generate donation page: {e}")
+
+    def auto_save_device(self, d):
+        is_wireless = (d.transport == "wireless" or ":" in d.serial)
+        if is_wireless:
+            ip = d.serial.split(':')[0]
+            dev_type = "wireless"
+        else:
+            ip = ""
+            dev_type = "usb"
+            
+        existing_dev = None
+        hw_serial = getattr(d, "hardware_serial", "")
+        for sd in getattr(self, "saved_devices", []):
+            if sd.get("type") == dev_type:
+                if hw_serial and sd.get("hardware_serial") == hw_serial:
+                    existing_dev = sd
+                    break
+                elif dev_type == "wireless" and sd.get("ip") == ip:
+                    existing_dev = sd
+                    break
+                elif dev_type == "usb" and sd.get("serial") == d.serial:
+                    existing_dev = sd
+                    break
+
+        if existing_dev:
+            existing_dev["brand"] = d.brand
+            existing_dev["model"] = d.model
+            existing_dev["display_name"] = d.display_name
+            if hw_serial:
+                existing_dev["hardware_serial"] = hw_serial
+            if dev_type == "wireless":
+                existing_dev["serial"] = d.serial
+                existing_dev["ip"] = ip
+        else:
+            new_dev = {
+                "serial": d.serial,
+                "hardware_serial": hw_serial,
+                "ip": ip,
+                "type": dev_type,
+                "brand": d.brand,
+                "model": d.model,
+                "nickname": "",
+                "display_name": d.display_name
+            }
+            if not hasattr(self, "saved_devices"):
+                self.saved_devices = []
+            self.saved_devices.append(new_dev)
+        
+        config.save_config(self, self.config_file)
+        self.refresh_saved_devices_ui()
+
+    def build_saved_devices_tab(self, parent):
+        self.saved_devices_scroll_frame = ctk.CTkScrollableFrame(parent, fg_color="transparent")
+        self.saved_devices_scroll_frame.pack(fill="both", expand=True, padx=6, pady=10)
+        self.refresh_saved_devices_ui()
+
+    def refresh_saved_devices_ui(self):
+        if not hasattr(self, "saved_devices_scroll_frame"):
+            return
+            
+        for widget in self.saved_devices_scroll_frame.winfo_children():
+            widget.destroy()
+            
+        if not getattr(self, "saved_devices", []):
+            empty_card = self.make_card(self.saved_devices_scroll_frame, "No Saved Devices Yet", "Devices will automatically save when plugged in over USB or connected wirelessly.")
+            empty_card.pack(fill="x", padx=6, pady=6)
+            return
+            
+        for dev in self.saved_devices:
+            dev_type = dev.get("type", "usb")
+            icon = "🔌" if dev_type == "usb" else "📶"
+            nickname = dev.get("nickname", "")
+            brand = dev.get("brand", "")
+            model = dev.get("model", "")
+            serial = dev.get("serial", "")
+            ip = dev.get("ip", "")
+            
+            title = nickname if nickname else f"{brand} {model}".strip() or f"Android Device"
+            subtitle = f"{brand} {model}".strip() if nickname else ""
+            
+            card = ctk.CTkFrame(self.saved_devices_scroll_frame, fg_color=CARD_BG, border_color=BORDER, border_width=1, corner_radius=10)
+            card.pack(fill="x", padx=6, pady=6)
+            
+            left_frame = ctk.CTkFrame(card, fg_color="transparent")
+            left_frame.pack(side="left", fill="both", expand=True, padx=16, pady=12)
+            
+            icon_lbl = ctk.CTkLabel(left_frame, text=icon, font=self.fonts["section"], width=32)
+            icon_lbl.pack(side="left", padx=(0, 12))
+            
+            info_subframe = ctk.CTkFrame(left_frame, fg_color="transparent")
+            info_subframe.pack(side="left", fill="y", expand=True)
+            
+            title_lbl = ctk.CTkLabel(info_subframe, text=title, font=self.fonts["body_bold"], text_color=TEXT, anchor="w")
+            title_lbl.pack(anchor="w")
+            
+            sub_lbl_text = ""
+            if dev_type == "wireless":
+                sub_lbl_text = f"IP: {ip}"
+                if subtitle:
+                    sub_lbl_text = f"{subtitle} • IP: {ip}"
+            else:
+                sub_lbl_text = f"USB Serial: {serial}"
+                if subtitle:
+                    sub_lbl_text = f"{subtitle} • Serial: {serial}"
+                    
+            sub_lbl = ctk.CTkLabel(info_subframe, text=sub_lbl_text, font=self.fonts["caption"], text_color=MUTED_TEXT, anchor="w")
+            sub_lbl.pack(anchor="w", pady=(2, 0))
+            
+            right_frame = ctk.CTkFrame(card, fg_color="transparent")
+            right_frame.pack(side="right", padx=16, pady=12)
+            
+            remove_btn = self.make_action_button(right_frame, "❌", lambda d=dev: self.remove_saved_device(d), width=40, fg_color="#bf3b3b", hover_color="#9e2e2e")
+            remove_btn.pack(side="right", padx=(8, 0))
+            
+            edit_btn = self.make_action_button(right_frame, "✏️ Edit", lambda d=dev: self.edit_saved_device(d), width=70)
+            edit_btn.pack(side="right", padx=(8, 0))
+            
+            connect_btn = self.make_action_button(right_frame, "⚡ Connect", lambda d=dev: self.connect_saved_device(d), width=100, fg_color=ACCENT, hover_color=ACCENT_HOVER)
+            connect_btn.pack(side="right")
+
+    def connect_saved_device(self, dev):
+        dev_type = dev.get("type", "usb")
+        if dev_type == "usb":
+            serial = dev.get("serial")
+            name = dev.get("nickname") or dev.get("display_name")
+            
+            def check_presence(devices):
+                # Update maps and UI combo first with the refreshed list of devices
+                self._refresh_devices_success(devices)
+                
+                found = None
+                for d in devices:
+                    if d.serial == serial:
+                        found = d
+                        break
+                if found:
+                    label = self.device_serial_to_label.get(serial)
+                    if label:
+                        self.device_combo.set(label)
+                    else:
+                        label = found.display_name
+                        self.device_combo.set(label)
+                    
+                    self.set_status(f"Found saved USB device: {name}. Launching scrcpy...")
+                    self.start_scrcpy()
+                else:
+                    self.set_status(f"Saved USB device not found: {name}")
+                    messagebox.showwarning(
+                        "Device Not Found",
+                        f"The saved USB device '{name}' is not currently connected to the computer.\n\nPlease check the USB connection and ensure USB debugging is enabled on the device."
+                    )
+            
+            self.set_status("Scanning connected devices to find USB target...")
+            self.adb.refresh_devices(
+                lambda list_devs: self.root.after(0, check_presence, list_devs),
+                lambda err: self.root.after(0, lambda: messagebox.showwarning("Scan Failed", f"Could not scan devices: {err}"))
+            )
+            
+        elif dev_type == "wireless":
+            ip = dev.get("ip")
+            hw_serial = dev.get("hardware_serial", "")
+            name = dev.get("nickname") or dev.get("display_name")
+            
+            def auto_select_wireless_helper(devices, resolved_ip, target_port=None):
+                # Update maps and UI combo first with the refreshed list of devices
+                self._refresh_devices_success(devices)
+                target_serial = f"{resolved_ip}:{target_port}" if target_port else f"{resolved_ip}:5555"
+                found = None
+                for d in devices:
+                    if d.serial == target_serial or d.serial.startswith(f"{resolved_ip}:"):
+                        found = d
+                        break
+                if found:
+                    label = self.device_serial_to_label.get(found.serial)
+                    if label:
+                        self.device_combo.set(label)
+                    else:
+                        self.device_combo.set(found.display_name)
+                    self.start_scrcpy()
+                else:
+                    self.start_scrcpy()
+
+            def on_serial_resolved(endpoints):
+                # We found the device on the network via mDNS!
+                # We have stable (port 5555) or dynamic resolved endpoints.
+                # Let's prefer stable if it exists, otherwise fall back to dynamic!
+                resolved_endpoint = endpoints.get("stable") or endpoints.get("dynamic")
+                if resolved_endpoint:
+                    res_ip, res_port = resolved_endpoint
+                    self.console_mgr.log("INFO", f"mDNS resolved {name} (serial {hw_serial}) to {res_ip}:{res_port}")
+                    
+                    # Update stored IP and serial in dev dictionary and save config
+                    dev["ip"] = res_ip
+                    dev["serial"] = f"{res_ip}:{res_port}"
+                    config.save_config(self, self.config_file)
+                    
+                    # Update connection entries in input fields
+                    self.var_ip.set(res_ip)
+                    self.var_connect_port.set(res_port)
+                    
+                    self.switch_tab("Connection")
+                    self.set_status(f"Connecting to resolved {res_ip}:{res_port}...")
+                    
+                    def on_res_connect_success():
+                        self.set_status(f"Connected to {name} at {res_ip}:{res_port}!")
+                        
+                        # If it's a dynamic port, promote to stable 5555 automatically
+                        if res_port != "5555":
+                            self.set_status("Connected! Enabling stable TCP/IP port 5555...")
+                            
+                            def on_tcpip_success():
+                                self.console_mgr.log("INFO", f"TCP/IP enabled on port 5555 for {res_ip}. Connecting to stable port...")
+                                
+                                def on_stable_connect():
+                                    self.set_status(f"Successfully connected to {name} on stable port 5555!")
+                                    dev["ip"] = res_ip
+                                    dev["serial"] = f"{res_ip}:5555"
+                                    config.save_config(self, self.config_file)
+                                    self.adb.refresh_devices(
+                                        lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, "5555"),
+                                        lambda err: self.root.after(0, self.start_scrcpy)
+                                    )
+                                    
+                                def on_stable_error(err_fb):
+                                    self.console_mgr.log("WARN", f"Could not connect to stable port 5555: {err_fb}. Remaining on dynamic port.")
+                                    self.adb.refresh_devices(
+                                        lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, res_port),
+                                        lambda err: self.root.after(0, self.start_scrcpy)
+                                    )
+                                    
+                                self.adb.connect_wireless(f"{res_ip}:5555",
+                                    lambda: self.root.after(0, on_stable_connect),
+                                    lambda err: self.root.after(0, on_stable_error, err)
+                                )
+                                
+                            def on_tcpip_error():
+                                self.console_mgr.log("WARN", f"Could not enable TCP/IP on port 5555 for {res_ip}. Proceeding on dynamic port.")
+                                self.adb.refresh_devices(
+                                    lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, res_port),
+                                    lambda err: self.root.after(0, self.start_scrcpy)
+                                )
+                                
+                            self.adb.enable_tcpip(f"{res_ip}:{res_port}",
+                                lambda: self.root.after(0, on_tcpip_success),
+                                lambda: self.root.after(0, on_tcpip_error)
+                            )
+                        else:
+                            self.adb.refresh_devices(
+                                lambda l: self.root.after(0, auto_select_wireless_helper, l, res_ip, "5555"),
+                                lambda err: self.root.after(0, self.start_scrcpy)
+                            )
+                            
+                    def on_res_connect_error(err_msg):
+                        self.set_status(f"Wireless connection to {name} failed.")
+                        messagebox.showerror(
+                            "Connection Failed",
+                            f"Could not connect to {res_ip}:{res_port}.\n\nError: {err_msg}\n\nPlease check if 'Wireless Debugging' or 'USB Debugging' with TCP/IP is active on your phone."
+                        )
+                        
+                    self.adb.connect_wireless(f"{res_ip}:{res_port}",
+                        lambda: self.root.after(0, on_res_connect_success),
+                        lambda err: self.root.after(0, on_res_connect_error, err)
+                    )
+                else:
+                    on_serial_error("No endpoints resolved.")
+                    
+            def on_serial_error(err):
+                # Fallback to the saved IP address and standard port discovery
+                self.console_mgr.log("WARN", f"Could not resolve device {name} via hardware serial: {err}. Falling back to saved IP: {ip}...")
+                trigger_ip_fallback()
+
+            def trigger_ip_fallback():
+                self.set_status(f"Resolving wireless connection port for {name} ({ip})...")
+                
+                def auto_select_wireless(devices, target_port=None):
+                    self._refresh_devices_success(devices)
+                    target_serial = f"{ip}:{target_port}" if target_port else f"{ip}:5555"
+                    found = None
+                    for d in devices:
+                        if d.serial == target_serial or d.serial.startswith(f"{ip}:"):
+                            found = d
+                            break
+                    if found:
+                        label = self.device_serial_to_label.get(found.serial)
+                        if label:
+                            self.device_combo.set(label)
+                        else:
+                            self.device_combo.set(found.display_name)
+                        self.start_scrcpy()
+                    else:
+                        self.start_scrcpy()
+
+                def on_mdns_discovered(services):
+                    port = services.get(ip)
+                    if port:
+                        self.console_mgr.log("INFO", f"mDNS resolved port {port} for IP {ip}")
+                        self.switch_tab("Connection")
+                        self.var_ip.set(f"{ip}:{port}")
+                        self.set_status(f"Connecting to {ip}:{port}...")
+                        
+                        def on_connect_success():
+                            self.set_status("Connected! Enabling stable TCP/IP port 5555...")
+                            
+                            def on_tcpip_success():
+                                self.console_mgr.log("INFO", f"TCP/IP enabled on port 5555 for {ip}. Connecting to stable port...")
+                                
+                                def on_stable_connect():
+                                    self.set_status(f"Successfully connected to {name} on stable port 5555!")
+                                    self.adb.refresh_devices(
+                                        lambda l: self.root.after(0, auto_select_wireless, l, "5555"),
+                                        lambda err: self.root.after(0, self.start_scrcpy)
+                                    )
+                                    
+                                def on_stable_error(err_fb):
+                                    self.console_mgr.log("WARN", f"Could not connect to stable port 5555: {err_fb}. Falling back to dynamic port.")
+                                    self.adb.refresh_devices(
+                                        lambda l: self.root.after(0, auto_select_wireless, l, port),
+                                        lambda err: self.root.after(0, self.start_scrcpy)
+                                    )
+                                    
+                                self.adb.connect_wireless(f"{ip}:5555",
+                                    lambda: self.root.after(0, on_stable_connect),
+                                    lambda err: self.root.after(0, on_stable_error, err)
+                                )
+                                
+                            def on_tcpip_error():
+                                self.console_mgr.log("WARN", f"Could not enable TCP/IP on port 5555 for {ip}. Proceeding on dynamic port.")
+                                self.adb.refresh_devices(
+                                    lambda l: self.root.after(0, auto_select_wireless, l, port),
+                                    lambda err: self.root.after(0, self.start_scrcpy)
+                                )
+                                
+                            self.adb.enable_tcpip(f"{ip}:{port}",
+                                lambda: self.root.after(0, on_tcpip_success),
+                                lambda: self.root.after(0, on_tcpip_error)
+                            )
+                            
+                        def on_connect_error(err_msg):
+                            self.set_status(f"Wireless connection to {name} failed.")
+                            messagebox.showerror(
+                                "Connection Failed",
+                                f"Could not connect to {ip}:{port}.\n\nError: {err_msg}\n\nPlease check if Wireless debugging is enabled on your phone and connected to the same Wi-Fi network."
+                            )
+                        
+                        self.adb.connect_wireless(f"{ip}:{port}", 
+                            lambda: self.root.after(0, on_connect_success),
+                            lambda err: self.root.after(0, on_connect_error, err)
+                        )
+                    else:
+                        self.console_mgr.log("WARN", f"Could not resolve port for {ip} via mDNS. Retrying on port 5555...")
+                        self.switch_tab("Connection")
+                        self.var_ip.set(f"{ip}:5555")
+                        self.set_status(f"Connecting to {ip}:5555...")
+                        
+                        def on_connect_success_fb():
+                            self.set_status(f"Successfully connected to {name} on port 5555!")
+                            self.adb.refresh_devices(
+                                lambda l: self.root.after(0, auto_select_wireless, l, "5555"),
+                                lambda err: self.root.after(0, self.start_scrcpy)
+                            )
+                            
+                        def on_connect_error_fb(err_msg):
+                            self.set_status(f"Wireless connection to {name} failed.")
+                            messagebox.showerror(
+                                "Connection Failed",
+                                f"Could not connect to {ip} via dynamic port (mDNS) or fallback port 5555.\n\nPlease ensure 'Wireless Debugging' is enabled on your phone. \nAlso Connect the both devices with same wifi."
+                            )
+                            
+                        self.adb.connect_wireless(f"{ip}:5555", 
+                            lambda: self.root.after(0, on_connect_success_fb),
+                            lambda err: self.root.after(0, on_connect_error_fb, err)
+                        )
+                        
+                def on_mdns_error(err):
+                    self.console_mgr.log("WARN", f"mDNS discovery error: {err}. Trying default port 5555...")
+                    self.switch_tab("Connection")
+                    self.var_ip.set(f"{ip}:5555")
+                    self.set_status(f"Connecting to {ip}:5555...")
+                    
+                    def on_connect_success_fb():
+                        self.set_status(f"Successfully connected to {name} on port 5555!")
+                        self.adb.refresh_devices(
+                            lambda l: self.root.after(0, auto_select_wireless, l, "5555"),
+                            lambda err: self.root.after(0, self.start_scrcpy)
+                        )
+                    
+                    def on_connect_error_fb(err_msg):
+                        self.set_status(f"Wireless connection to {name} failed.")
+                        messagebox.showerror(
+                            "Connection Failed",
+                            f"Could not connect to {ip}:5555.\n\nError: {err_msg}\n\nPlease check if 'Wireless Debugging' is enabled."
+                        )
+                        
+                    self.adb.connect_wireless(f"{ip}:5555", 
+                        lambda: self.root.after(0, on_connect_success_fb),
+                        lambda err: self.root.after(0, on_connect_error_fb, err)
+                    )
+                    
+                self.adb.discover_mdns_ports(
+                    lambda srv: self.root.after(0, on_mdns_discovered, srv),
+                    lambda err: self.root.after(0, on_mdns_error, err)
+                )
+
+            if hw_serial:
+                self.set_status(f"Scanning local network for {name} ({hw_serial})...")
+                self.adb.resolve_device_by_serial(
+                    hw_serial,
+                    lambda endps: self.root.after(0, on_serial_resolved, endps),
+                    lambda err: self.root.after(0, on_serial_error, err)
+                )
+            else:
+                trigger_ip_fallback()
+
+    def edit_saved_device(self, dev):
+        def on_save(new_nick, new_ip):
+            dev["nickname"] = new_nick
+            if new_ip is not None:
+                dev["ip"] = new_ip
+                if ":" in dev.get("serial", ""):
+                    port = dev["serial"].split(":")[1]
+                    dev["serial"] = f"{new_ip}:{port}"
+                else:
+                    dev["serial"] = f"{new_ip}:5555"
+            config.save_config(self, self.config_file)
+            self.refresh_saved_devices_ui()
+            self.console_mgr.log("INFO", f"Saved device updated: {dev.get('display_name')}")
+            
+        dialog = SavedDeviceDialog(self, dev, on_save)
+
+    def remove_saved_device(self, dev):
+        name = dev.get("nickname") or dev.get("display_name")
+        confirm = messagebox.askyesno("Remove Saved Device", f"Are you sure you want to forget the device '{name}'?")
+        if confirm:
+            if dev in self.saved_devices:
+                self.saved_devices.remove(dev)
+            config.save_config(self, self.config_file)
+            self.refresh_saved_devices_ui()
+            self.console_mgr.log("INFO", f"Removed device from saved list: {name}")
+
+
+class SavedDeviceDialog(ctk.CTkToplevel):
+    def __init__(self, parent, device, on_save):
+        super().__init__(parent.root)
+        self.device = device
+        self.on_save = on_save
+        
+        self.title("Edit Saved Device")
+        self.configure(fg_color=SHELL_BG)
+        
+        self.width = 400
+        self.height = 300 if device.get("type") == "wireless" else 240
+        self.geometry(f"{self.width}x{self.height}")
+        self.resizable(False, False)
+        
+        self.transient(parent.root)
+        self.grab_set()
+        
+        parent_x = parent.root.winfo_rootx()
+        parent_y = parent.root.winfo_rooty()
+        parent_w = parent.root.winfo_width()
+        parent_h = parent.root.winfo_height()
+        
+        x = parent_x + (parent_w - self.width) // 2
+        y = parent_y + (parent_h - self.height) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        title_label = ctk.CTkLabel(self, text="Edit Device Details", font=parent.fonts["section"], text_color=TEXT)
+        title_label.pack(fill="x", padx=24, pady=(20, 10))
+        
+        nick_frame = ctk.CTkFrame(self, fg_color="transparent")
+        nick_frame.pack(fill="x", padx=24, pady=8)
+        
+        nick_label = ctk.CTkLabel(nick_frame, text="Nickname", font=parent.fonts["body_bold"], text_color=MUTED_TEXT)
+        nick_label.pack(anchor="w", pady=(0, 4))
+        
+        self.nick_entry = ctk.CTkEntry(nick_frame, fg_color=FIELD_BG, border_color=BORDER, text_color=TEXT, placeholder_text="e.g. Primary Phone", corner_radius=8, height=40, font=parent.fonts["body"])
+        self.nick_entry.pack(fill="x")
+        self.nick_entry.insert(0, device.get("nickname", ""))
+        
+        self.ip_entry = None
+        if device.get("type") == "wireless":
+            ip_frame = ctk.CTkFrame(self, fg_color="transparent")
+            ip_frame.pack(fill="x", padx=24, pady=8)
+            
+            ip_label = ctk.CTkLabel(ip_frame, text="IP Address", font=parent.fonts["body_bold"], text_color=MUTED_TEXT)
+            ip_label.pack(anchor="w", pady=(0, 4))
+            
+            self.ip_entry = ctk.CTkEntry(ip_frame, fg_color=FIELD_BG, border_color=BORDER, text_color=TEXT, corner_radius=8, height=40, font=parent.fonts["body"])
+            self.ip_entry.pack(fill="x")
+            self.ip_entry.insert(0, device.get("ip", ""))
+            
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=24, pady=(20, 10), side="bottom")
+        
+        cancel_btn = ctk.CTkButton(btn_frame, text="Cancel", width=100, height=38, command=self.destroy, fg_color=FIELD_BG, hover_color=CARD_HOVER, border_color=BORDER, border_width=1, text_color=TEXT, corner_radius=8, font=parent.fonts["button"])
+        cancel_btn.pack(side="left", padx=(0, 10))
+        
+        save_btn = ctk.CTkButton(btn_frame, text="Save Changes", height=38, command=self.save, fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=TEXT, corner_radius=8, font=parent.fonts["button"])
+        save_btn.pack(side="right", fill="x", expand=True)
+        
+        self.nick_entry.focus()
+        
+    def save(self):
+        new_nick = self.nick_entry.get().strip()
+        new_ip = self.ip_entry.get().strip() if self.ip_entry else None
+        
+        self.on_save(new_nick, new_ip)
+        self.destroy()

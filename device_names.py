@@ -14,6 +14,7 @@ class DeviceInfo:
     device: str = ""
     market_name: str = ""
     display_name: str = ""
+    hardware_serial: str = ""
 
 def load_device_name_map(script_dir: str) -> dict:
     map_path = os.path.join(script_dir, "data", "device_name_map.json")

@@ -36,6 +36,7 @@ def init_config_vars(target_obj):
 
 def load_config(target_obj, config_file):
     """Loads configuration from file into the target object's variables."""
+    target_obj.saved_devices = []
     if not os.path.exists(config_file):
         return
     try:
@@ -44,6 +45,8 @@ def load_config(target_obj, config_file):
         for key, (var_name, _, _) in CONFIG_FIELDS.items():
             if key in config:
                 getattr(target_obj, var_name).set(config[key])
+        if "saved_devices" in config:
+            target_obj.saved_devices = config["saved_devices"]
     except Exception as e:
         print(f"Error loading config: {e}")
 
@@ -52,8 +55,9 @@ def save_config(target_obj, config_file):
     config = {}
     for key, (var_name, _, _) in CONFIG_FIELDS.items():
         config[key] = getattr(target_obj, var_name).get()
+    config["saved_devices"] = getattr(target_obj, "saved_devices", [])
     try:
         with open(config_file, 'w') as f:
-            json.dump(config, f)
+            json.dump(config, f, indent=4)
     except Exception as e:
         print(f"Error saving config: {e}")

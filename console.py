@@ -21,6 +21,8 @@ def infer_fix_hint(message):
         return "Try running the app as administrator and confirm no other tool is locking adb or scrcpy."
     if "more than one device" in lowered:
         return "Disconnect extra devices or keep using the selected serial with the device chooser."
+    if "capture/encoding error" in lowered:
+        return "Camera or screen capture failed on this resolution/aspect-ratio. Try setting a lower 'Max size' (e.g. 1920 or 1080) in Settings, or check if the camera is already in use by another app."
     return None
 
 def extract_console_level(line):
