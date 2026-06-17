@@ -585,7 +585,11 @@ class QuickSettingsDialog(ctk.CTkToplevel):
         
         r_switches = ctk.CTkFrame(inner_cam, fg_color="transparent")
         r_switches.pack(fill="x", pady=6)
-        self.parent.make_checkbox(r_switches, "Enable Camera Torch (Flashlight)", self.parent.var_camera_torch).pack(side="left")
+        def on_torch_toggle():
+            if self.parent.var_camera_torch.get():
+                messagebox.showinfo("Scrcpy Version Note", "Using the camera torch requires Scrcpy version 3.0.0 or newer (4.0.0 recommended).\n\nIf you encounter an 'unknown option -- camera-torch' error, please update your scrcpy.exe.")
+                
+        self.parent.make_checkbox(r_switches, "Enable Camera Torch (Flashlight)", self.parent.var_camera_torch, command=on_torch_toggle).pack(side="left")
         
         r_combos = ctk.CTkFrame(inner_cam, fg_color="transparent")
         r_combos.pack(fill="x", pady=6)
@@ -1431,10 +1435,10 @@ class ScrcpyGUI:
             corner_radius=8, height=40, font=self.fonts["body"], **kwargs
         )
 
-    def make_checkbox(self, parent, text, variable):
+    def make_checkbox(self, parent, text, variable, command=None):
         """Replaces checkboxes with modern switches matching design specification."""
         return ctk.CTkSwitch(
-            parent, text=text, variable=variable,
+            parent, text=text, variable=variable, command=command,
             progress_color=COLOR_ACCENT, fg_color=COLOR_BORDER,
             text_color=COLOR_TEXT_PRIMARY, font=self.fonts["body"]
         )
