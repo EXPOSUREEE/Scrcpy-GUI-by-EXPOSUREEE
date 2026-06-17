@@ -686,7 +686,104 @@ class QuickSettingsDialog(ctk.CTkToplevel):
         self.parent.refresh_dashboard_state()
         self.destroy()
 
+class AutoRecoverDialog(ctk.CTkToplevel):
+    def __init__(self, parent, saved_dev):
+        super().__init__(parent.root)
+        self.parent = parent
+        self.saved_dev = saved_dev
+        self.hw_serial = saved_dev.get("hardware_serial", "")
+        self.dev_name = saved_dev.get("nickname") or saved_dev.get("display_name", "Device")
+        
+        self.title(f"Auto-Recover: {self.dev_name}")
+        self.geometry("400x200")
+        self.resizable(False, False)
+        self.grab_set()
+        
+        self.update_idletasks()
+        x = parent.root.winfo_x() + (parent.root.winfo_width() - 400) // 2
+        y = parent.root.winfo_y() + (parent.root.winfo_height() - 200) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        self.configure(fg_color=COLOR_BG)
+        
+        self.status_var = ctk.StringVar(value=f"Waiting for you to connect\n{self.dev_name} via USB...")
+        
+        self.lbl_status = ctk.CTkLabel(self, textvariable=self.status_var, font=ctk.CTkFont(size=14, weight="bold"), text_color=COLOR_TEXT, justify="center")
+        self.lbl_status.pack(expand=True, pady=(20, 10))
+        
+        self.btn_cancel = ctk.CTkButton(self, text="Cancel", command=self.destroy, fg_color=COLOR_CARD_BG, hover_color=COLOR_BORDER)
+        self.btn_cancel.pack(pady=(0, 20))
+        
+        self.is_running = True
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        self.poll_usb_device()
 
+    def on_close(self):
+        self.is_running = False
+        self.destroy()
+
+    def poll_usb_device(self):
+        if not self.is_running:
+            return
+            
+        def on_success(devices):
+            if not self.is_running:
+                return
+            matched_device = None
+            for d in devices:
+                if d.transport == "usb":
+                    if self.hw_serial and getattr(d, "hardware_serial", "") == self.hw_serial:
+                        matched_device = d
+                        break
+                    elif not self.hw_serial and len([x for x in devices if x.transport == "usb"]) == 1:
+                        matched_device = d
+                        break
+            
+            if matched_device:
+                self.status_var.set("Device detected! Configuring Wi-Fi...")
+                self.btn_cancel.configure(state="disabled")
+                self.start_recovery(matched_device)
+            else:
+                self.after(2000, self.poll_usb_device)
+                
+        def on_error(reason):
+            if self.is_running:
+                self.after(2000, self.poll_usb_device)
+                
+        self.parent.adb.refresh_devices(on_success, on_error)
+        
+    def start_recovery(self, device):
+        serial = device.serial
+        
+        def on_ip_success(new_ip):
+            self.status_var.set(f"IP retrieved: {new_ip}. Connecting...")
+            self.saved_dev["ip"] = new_ip
+            self.saved_dev["serial"] = f"{new_ip}:5555"
+            self.saved_dev["hardware_serial"] = getattr(device, "hardware_serial", "")
+            config.save_config(self.parent, self.parent.config_file)
+            self.parent.refresh_saved_devices_ui()
+            
+            def on_connect_success():
+                self.status_var.set("Connected successfully!")
+                self.parent._connect_wireless_success(f"{new_ip}:5555")
+                self.after(1000, lambda: [self.parent.start_scrcpy(), self.on_close()])
+                
+            def on_connect_error(reason):
+                self.status_var.set("Failed to connect via Wi-Fi.")
+                self.btn_cancel.configure(state="normal", text="Close")
+                
+            self.parent.adb.connect_wireless(f"{new_ip}:5555", on_connect_success, on_connect_error)
+            
+        def on_tcpip_success():
+            self.status_var.set("TCP/IP enabled. Fetching new IP...")
+            self.after(1000, lambda: self.parent.adb.get_device_ip(serial, on_ip_success, lambda: self.status_var.set("Failed to get IP.")))
+            
+        def on_tcpip_error():
+            self.status_var.set("Failed to enable TCP/IP.")
+            self.btn_cancel.configure(state="normal", text="Close")
+            
+        self.parent.adb.enable_tcpip(serial, on_tcpip_success, on_tcpip_error)
 # --- CUSTOM TITLE BAR ---
 class TitleBar(ctk.CTkFrame):
     """
@@ -2686,9 +2783,10 @@ class ScrcpyGUI:
 
     def connect_saved_device(self, dev):
         dev_type = dev.get("type", "usb")
+        name = dev.get("nickname") or dev.get("display_name")
+        
         if dev_type == "usb":
             serial = dev.get("serial")
-            name = dev.get("nickname") or dev.get("display_name")
             
             def check_presence(devices):
                 self._refresh_devices_success(devices)
@@ -2697,6 +2795,7 @@ class ScrcpyGUI:
                     self.device_combo.set(label)
                     self.refresh_dashboard_state()
                     self.set_status(f"Selected USB device: {name}")
+                    self.start_scrcpy()
                 else:
                     messagebox.showerror("Error", f"USB Device '{name}' is not physically connected.")
                     self.console_mgr.log("WARN", f"Saved USB device {serial} not found in live scan.")
@@ -2713,8 +2812,48 @@ class ScrcpyGUI:
             
             def on_success():
                 self.root.after(0, self._connect_wireless_success, ip_port)
+                self.root.after(1500, self.start_scrcpy)
+                
             def on_error(reason):
                 self.root.after(0, self._connect_wireless_error, ip_port, reason)
+                def show_error():
+                    err_msg = (f"Failed to connect to saved wireless device '{name}'.\n\n"
+                               f"The IP address may have changed from {ip}, or Wireless Debugging might be turned off on the device.\n\n"
+                               "Would you like to Auto-Recover? (Requires plugging in via USB)")
+                    
+                    dialog = ctk.CTkToplevel(self.root)
+                    dialog.title("Connection Failed")
+                    dialog.geometry("450x220")
+                    dialog.resizable(False, False)
+                    dialog.grab_set()
+                    dialog.configure(fg_color=COLOR_BG)
+                    
+                    dialog.update_idletasks()
+                    x = self.root.winfo_x() + (self.root.winfo_width() - 450) // 2
+                    y = self.root.winfo_y() + (self.root.winfo_height() - 200) // 2
+                    dialog.geometry(f"+{x}+{y}")
+                    
+                    lbl = ctk.CTkLabel(dialog, text=err_msg, font=ctk.CTkFont(size=13), text_color=COLOR_TEXT, justify="center", wraplength=400)
+                    lbl.pack(pady=20, padx=20)
+                    
+                    btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+                    btn_frame.pack(fill="x", padx=20, pady=(0, 20))
+                    
+                    def do_auto_recover():
+                        dialog.destroy()
+                        AutoRecoverDialog(self, dev)
+                        
+                    def do_edit():
+                        dialog.destroy()
+                        self.edit_saved_device(dev)
+                        
+                    btn_recover = ctk.CTkButton(btn_frame, text="⚡ Auto-Recover", fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, command=do_auto_recover)
+                    btn_recover.pack(side="left", expand=True, padx=5)
+                    
+                    btn_edit = ctk.CTkButton(btn_frame, text="Edit Manually", fg_color=COLOR_CARD_BG, hover_color=COLOR_BORDER, command=do_edit)
+                    btn_edit.pack(side="right", expand=True, padx=5)
+                    
+                self.root.after(100, show_error)
                 
             self.adb.connect_wireless(ip_port, on_success, on_error)
 
