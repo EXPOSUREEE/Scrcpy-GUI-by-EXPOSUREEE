@@ -23,7 +23,13 @@ CONFIG_FIELDS = {
     "borderless": ("var_borderless", "BooleanVar", False),
     "no_control": ("var_no_control", "BooleanVar", False),
     "record": ("var_record", "BooleanVar", False),
-    "debug_mode": ("var_debug_mode", "BooleanVar", False)
+    "debug_mode": ("var_debug_mode", "BooleanVar", False),
+    "screen_mode": ("var_screen_mode", "StringVar", "HID"),
+    "camera_id": ("var_camera_id", "StringVar", "Default"),
+    "camera_torch": ("var_camera_torch", "BooleanVar", False),
+    "camera_zoom": ("var_camera_zoom", "StringVar", "1.0"),
+    "camera_max_size": ("var_camera_max_size", "StringVar", "0"),
+    "camera_fps": ("var_camera_fps", "StringVar", "30")
 }
 
 def init_config_vars(target_obj):

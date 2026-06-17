@@ -82,7 +82,7 @@ def version_tuple(v):
 def create_vector_icon(icon_type, size=(24, 24), color="#FFFFFF"):
     """
     Generates transparent high-resolution PNG shapes in memory using PIL.
-    Guarantees razor-sharp vector-like icons across all systems without local file dependencies.
+    Renders high-quality Lucide-style outline icons with rounded joints and caps.
     """
     try:
         from PIL import Image, ImageDraw
@@ -93,54 +93,100 @@ def create_vector_icon(icon_type, size=(24, 24), color="#FFFFFF"):
     draw = ImageDraw.Draw(img)
     w, h = size
     
-    if icon_type == "connection":  # Lightning bolt
+    # Calculate stroke width dynamically based on icon size (Lucide style is ~2px on 24x24)
+    stroke_width = max(1.5, min(w, h) / 12.0)
+    
+    if icon_type == "connection":  # Lightning bolt (Lucide 'zap' style)
         points = [
-            (int(w * 0.58), int(h * 0.1)),
-            (int(w * 0.22), int(h * 0.55)),
-            (int(w * 0.5), int(h * 0.55)),
-            (int(w * 0.42), int(h * 0.9)),
-            (int(w * 0.78), int(h * 0.45)),
-            (int(w * 0.5), int(h * 0.45))
+            (w * 0.58, h * 0.08),
+            (w * 0.25, h * 0.52),
+            (w * 0.50, h * 0.52),
+            (w * 0.42, h * 0.92),
+            (w * 0.75, h * 0.48),
+            (w * 0.50, h * 0.48),
+            (w * 0.58, h * 0.08)  # Close path
         ]
-        draw.polygon(points, fill=color)
-    elif icon_type == "devices":  # Smartphone outline
-        draw.rounded_rectangle([int(w * 0.25), int(h * 0.12), int(w * 0.75), int(h * 0.88)], radius=4, outline=color, width=2)
-        draw.line([(int(w * 0.44), int(h * 0.2)), (int(w * 0.56), int(h * 0.2))], fill=color, width=2)  # Speaker
-        draw.line([(int(w * 0.45), int(h * 0.8)), (int(w * 0.55), int(h * 0.8))], fill=color, width=2)  # Home button
-    elif icon_type == "display":  # Monitor/Screen
-        draw.rounded_rectangle([int(w * 0.15), int(h * 0.18), int(w * 0.85), int(h * 0.7)], radius=3, outline=color, width=2)
-        draw.line([(int(w * 0.5), int(h * 0.7)), (int(w * 0.5), int(h * 0.82))], fill=color, width=2)   # Neck
-        draw.line([(int(w * 0.35), int(h * 0.82)), (int(w * 0.65), int(h * 0.82))], fill=color, width=2) # Base
-    elif icon_type == "advanced":  # Cog/Gear
-        cx, cy = int(w / 2), int(h / 2)
-        r_out = int(w * 0.28)
-        r_in = int(w * 0.12)
-        draw.ellipse([cx - r_out, cy - r_out, cx + r_out, cy + r_out], outline=color, width=2)
-        draw.ellipse([cx - r_in, cy - r_in, cx + r_in, cy + r_in], fill=color)
+        draw.line(points, fill=color, width=int(stroke_width), joint="round")
+        
+    elif icon_type == "devices":  # Smartphone outline (Lucide 'smartphone' style)
+        x1, y1 = w * 0.25, h * 0.08
+        x2, y2 = w * 0.75, h * 0.92
+        radius = int(min(w, h) * 0.08)
+        draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, outline=color, width=int(stroke_width))
+        
+        # Speaker grill at top
+        draw.line([(w * 0.44, h * 0.18), (w * 0.56, h * 0.18)], fill=color, width=int(stroke_width), joint="round")
+        
+        # Home button at bottom
+        draw.line([(w * 0.46, h * 0.82), (w * 0.54, h * 0.82)], fill=color, width=int(stroke_width), joint="round")
+        
+    elif icon_type == "display":  # Monitor/Screen (Lucide 'monitor' style)
+        x1, y1 = w * 0.12, h * 0.15
+        x2, y2 = w * 0.88, h * 0.70
+        radius = int(min(w, h) * 0.06)
+        draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, outline=color, width=int(stroke_width))
+        
+        # Neck
+        draw.line([(w * 0.50, h * 0.70), (w * 0.50, h * 0.85)], fill=color, width=int(stroke_width))
+        
+        # Base
+        draw.line([(w * 0.32, h * 0.85), (w * 0.68, h * 0.85)], fill=color, width=int(stroke_width), joint="round")
+        
+    elif icon_type == "advanced":  # Cog/Gear (Lucide 'settings' style)
+        cx, cy = w / 2.0, h / 2.0
+        r_out = w * 0.24
+        r_in = w * 0.09
+        
+        # Outer circle
+        draw.ellipse([cx - r_out, cy - r_out, cx + r_out, cy + r_out], outline=color, width=int(stroke_width))
+        
+        # Inner circle (center hole)
+        draw.ellipse([cx - r_in, cy - r_in, cx + r_in, cy + r_in], outline=color, width=int(stroke_width))
+        
+        # 8 teeth/bumps around the outer wheel
         for i in range(8):
-            angle = i * math.pi / 4
-            x1 = int(cx + (r_out - 1) * math.cos(angle))
-            y1 = int(cy + (r_out - 1) * math.sin(angle))
-            x2 = int(cx + (r_out + 4) * math.cos(angle))
-            y2 = int(cy + (r_out + 4) * math.sin(angle))
-            draw.line([(x1, y1), (x2, y2)], fill=color, width=2)
-    elif icon_type == "console":  # Prompt `>_`
-        draw.line([(int(w * 0.2), int(h * 0.3)), (int(w * 0.45), int(h * 0.5))], fill=color, width=2)
-        draw.line([(int(w * 0.45), int(h * 0.5)), (int(w * 0.2), int(h * 0.7))], fill=color, width=2)
-        draw.line([(int(w * 0.52), int(h * 0.7)), (int(w * 0.78), int(h * 0.7))], fill=color, width=2)
-    elif icon_type == "help":  # Book
-        draw.rounded_rectangle([int(w * 0.2), int(h * 0.18), int(w * 0.8), int(h * 0.82)], radius=2, outline=color, width=2)
-        draw.line([(int(w * 0.5), int(h * 0.18)), (int(w * 0.5), int(h * 0.82))], fill=color, width=2)  # Spine
-        # Left page lines
-        draw.line([(int(w * 0.3), int(h * 0.35)), (int(w * 0.45), int(h * 0.35))], fill=color, width=1)
-        draw.line([(int(w * 0.3), int(h * 0.5)), (int(w * 0.45), int(h * 0.5))], fill=color, width=1)
-        draw.line([(int(w * 0.3), int(h * 0.65)), (int(w * 0.45), int(h * 0.65))], fill=color, width=1)
-        # Right page lines
-        draw.line([(int(w * 0.55), int(h * 0.35)), (int(w * 0.7), int(h * 0.35))], fill=color, width=1)
-        draw.line([(int(w * 0.55), int(h * 0.5)), (int(w * 0.7), int(h * 0.5))], fill=color, width=1)
-        draw.line([(int(w * 0.55), int(h * 0.65)), (int(w * 0.7), int(h * 0.65))], fill=color, width=1)
-    else:  # Bullet list dot
-        draw.ellipse([int(w * 0.35), int(h * 0.35), int(w * 0.65), int(h * 0.65)], fill=color)
+            angle = i * math.pi / 4.0
+            x1 = cx + (r_out - 1) * math.cos(angle)
+            y1 = cy + (r_out - 1) * math.sin(angle)
+            x2 = cx + (r_out + w * 0.10) * math.cos(angle)
+            y2 = cy + (r_out + w * 0.10) * math.sin(angle)
+            draw.line([(x1, y1), (x2, y2)], fill=color, width=int(stroke_width * 1.5), joint="round")
+            
+    elif icon_type == "console":  # Prompt `>_` (Lucide 'terminal' style)
+        # Greater-than prompt
+        draw.line([
+            (w * 0.18, h * 0.25),
+            (w * 0.44, h * 0.50),
+            (w * 0.18, h * 0.75)
+        ], fill=color, width=int(stroke_width), joint="round")
+        
+        # Cursor line
+        draw.line([
+            (w * 0.52, h * 0.75),
+            (w * 0.82, h * 0.75)
+        ], fill=color, width=int(stroke_width), joint="round")
+        
+    elif icon_type == "help":  # Book Open (Lucide 'book-open' style)
+        # Left page
+        draw.line([
+            (w * 0.50, h * 0.82),
+            (w * 0.15, h * 0.76),
+            (w * 0.15, h * 0.22),
+            (w * 0.50, h * 0.28),
+            (w * 0.50, h * 0.82)
+        ], fill=color, width=int(stroke_width), joint="round")
+        
+        # Right page
+        draw.line([
+            (w * 0.50, h * 0.82),
+            (w * 0.85, h * 0.76),
+            (w * 0.85, h * 0.22),
+            (w * 0.50, h * 0.28),
+            (w * 0.50, h * 0.82)
+        ], fill=color, width=int(stroke_width), joint="round")
+        
+    else:  # Generic bullet dot
+        draw.ellipse([w * 0.35, h * 0.35, w * 0.65, h * 0.65], fill=color)
 
     return img
 
@@ -374,6 +420,271 @@ class SavedDeviceDialog(ctk.CTkToplevel):
         save_btn.pack(side="right", fill="x", expand=True)
         
         self.nick_entry.focus()
+
+
+# --- QUICK CONFIGURATION SETTINGS DIALOG ---
+class QuickSettingsDialog(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent.root)
+        self.parent = parent
+        
+        self.title("Quick Mirroring Settings")
+        self.configure(fg_color=COLOR_WINDOW_BG)
+        
+        self.width = 500
+        self.height = 580
+        self.geometry(f"{self.width}x{self.height}")
+        self.resizable(False, False)
+        
+        # Modal configuration
+        self.transient(parent.root)
+        self.grab_set()
+        
+        # Center coordinates
+        parent_x = parent.root.winfo_rootx()
+        parent_y = parent.root.winfo_rooty()
+        parent_w = parent.root.winfo_width()
+        parent_h = parent.root.winfo_height()
+        x = parent_x + (parent_w - self.width) // 2
+        y = parent_y + (parent_h - self.height) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        title_label = ctk.CTkLabel(self, text="Quick Mirror Settings", font=parent.fonts["section"], text_color=COLOR_TEXT_PRIMARY)
+        title_label.pack(fill="x", padx=24, pady=(20, 10))
+        
+        # Segmented button for switching tabs
+        self.tab_var = ctk.StringVar(value="Screen")
+        self.tab_segmented = ctk.CTkSegmentedButton(
+            self,
+            values=["Screen", "Camera", "Mic"],
+            variable=self.tab_var,
+            font=parent.fonts["body_bold"],
+            fg_color=COLOR_FIELD_BG,
+            selected_color=COLOR_ACCENT,
+            selected_hover_color=COLOR_ACCENT_HOVER,
+            unselected_color=COLOR_FIELD_BG,
+            unselected_hover_color=COLOR_CARD_HOVER,
+            command=self.switch_quick_tab
+        )
+        self.tab_segmented.pack(fill="x", padx=24, pady=(0, 16))
+        
+        # Bottom apply & close button (packed first at the bottom so it is always visible)
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=24, pady=(16, 20), side="bottom")
+        
+        close_btn = ctk.CTkButton(
+            btn_frame, text="Apply & Close", height=40, command=self.apply_and_close,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            text_color=COLOR_TEXT_PRIMARY, corner_radius=8, font=parent.fonts["button"]
+        )
+        close_btn.pack(fill="x")
+        
+        # Tab Container (packed second to fill remaining vertical space)
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.pack(fill="both", expand=True, padx=24)
+        
+        self.tab_frames = {}
+        for tab_name in ["Screen", "Camera", "Mic"]:
+            frame = ctk.CTkScrollableFrame(self.container, fg_color="transparent")
+            self.tab_frames[tab_name] = frame
+            
+        self.build_screen_tab()
+        self.build_camera_tab()
+        self.build_mic_tab()
+        
+        # Set active tab based on parent's current source
+        source = parent.var_source.get()
+        if source in ("camera_back", "camera_front", "camera"):
+            init_tab = "Camera"
+        elif source == "mic_only":
+            init_tab = "Mic"
+        else:
+            init_tab = "Screen"
+            
+        self.tab_var.set(init_tab)
+        self.switch_quick_tab(init_tab)
+
+    def switch_quick_tab(self, tab_name):
+        for name, frame in self.tab_frames.items():
+            frame.pack_forget()
+        self.tab_frames[tab_name].pack(fill="both", expand=True)
+        
+        # Auto scan lenses on camera tab enter
+        if tab_name == "Camera":
+            self.detect_lenses()
+
+    def build_screen_tab(self):
+        frame = self.tab_frames["Screen"]
+        
+        # 1. Connection Mode (HID vs OTG)
+        mode_card = self.parent.make_card(frame, "Connection Mode", "Choose how control and display are managed.")
+        mode_card.pack(fill="x", pady=(0, 12))
+        
+        inner_mode = ctk.CTkFrame(mode_card, fg_color="transparent")
+        inner_mode.pack(fill="x", padx=20, pady=(6, 12))
+        
+        self.screen_mode_segmented = ctk.CTkSegmentedButton(
+            inner_mode,
+            values=["HID (Mirror + Control)", "OTG (Control Only)"],
+            variable=self.parent.var_screen_mode,
+            font=self.parent.fonts["body_bold"],
+            fg_color=COLOR_FIELD_BG,
+            selected_color=COLOR_ACCENT,
+            selected_hover_color=COLOR_ACCENT_HOVER,
+            unselected_color=COLOR_FIELD_BG,
+            unselected_hover_color=COLOR_CARD_HOVER
+        )
+        self.screen_mode_segmented.pack(fill="x", pady=4)
+        
+        # 2. Quality options
+        param_card = self.parent.make_card(frame, "Screen Parameters", "Tune the video rendering properties.")
+        param_card.pack(fill="x")
+        
+        inner_params = ctk.CTkFrame(param_card, fg_color="transparent")
+        inner_params.pack(fill="x", padx=20, pady=(6, 12))
+        
+        self.parent.make_labeled_slider(inner_params, "Stream Bitrate", self.parent.var_bitrate, 1, 64, lambda v: f"{v} Mbps").pack(fill="x", pady=6)
+        self.parent.make_labeled_slider(inner_params, "Max FPS Limit", self.parent.var_max_fps, 0, 120, lambda v: "Auto" if v == 0 else f"{v} FPS").pack(fill="x", pady=6)
+        self.parent.make_labeled_slider(inner_params, "Max Resolution Size", self.parent.var_max_size, 0, 2560, lambda v: "Native Size" if v == 0 else f"{v}px").pack(fill="x", pady=6)
+        
+        r_orient = ctk.CTkFrame(inner_params, fg_color="transparent")
+        r_orient.pack(fill="x", pady=6)
+        self.parent.make_labeled_combo_row(
+            r_orient, "Orientation", self.parent.orientation_combo_val,
+            ["Auto (Rotate with Phone)", "Portrait (@0)", "Landscape (@90)", "Portrait Reversed (@180)", "Landscape Reversed (@270)"],
+            width=210, label_width=100
+        ).pack(side="left")
+
+    def build_camera_tab(self):
+        frame = self.tab_frames["Camera"]
+        
+        # 1. Lens Selector Card
+        lens_card = self.parent.make_card(frame, "Camera Input", "Detect and target a specific physical camera sensor.")
+        lens_card.pack(fill="x", pady=(0, 12))
+        
+        inner_lens = ctk.CTkFrame(lens_card, fg_color="transparent")
+        inner_lens.pack(fill="x", padx=20, pady=(6, 12))
+        
+        r_lens = ctk.CTkFrame(inner_lens, fg_color="transparent")
+        r_lens.pack(fill="x", pady=4)
+        
+        ctk.CTkLabel(r_lens, text="Camera Lens", width=90, anchor="w", text_color=COLOR_TEXT_MUTED, font=self.parent.fonts["body_bold"]).pack(side="left")
+        
+        self.camera_lens_combo = self.parent.make_combo(r_lens, values=["Default"], variable=self.parent.var_camera_id, width=220)
+        self.camera_lens_combo.pack(side="left", padx=(10, 10))
+        
+        self.btn_refresh_lenses = self.parent.make_action_button(r_lens, "🔄 Detect", self.detect_lenses, width=80)
+        self.btn_refresh_lenses.pack(side="left")
+        
+        # 2. Camera Settings Card
+        cam_settings_card = self.parent.make_card(frame, "Camera Settings", "Override settings for camera streaming.")
+        cam_settings_card.pack(fill="x")
+        
+        inner_cam = ctk.CTkFrame(cam_settings_card, fg_color="transparent")
+        inner_cam.pack(fill="x", padx=20, pady=(6, 12))
+        
+        r_switches = ctk.CTkFrame(inner_cam, fg_color="transparent")
+        r_switches.pack(fill="x", pady=6)
+        self.parent.make_checkbox(r_switches, "Enable Camera Torch (Flashlight)", self.parent.var_camera_torch).pack(side="left")
+        
+        r_combos = ctk.CTkFrame(inner_cam, fg_color="transparent")
+        r_combos.pack(fill="x", pady=6)
+        self.parent.make_labeled_combo_row(r_combos, "Aspect Ratio", self.parent.cam_ar_combo_val, ["Full Sensor (Default)", "4:3", "16:9"], width=130, label_width=90).pack(side="left")
+        self.parent.make_labeled_combo_row(r_combos, "Orientation", self.parent.cam_orientation_combo_val, ["0° (Default)", "90°", "180°", "270°"], width=130, label_width=90).pack(side="left", padx=(20, 0))
+        
+        self.parent.make_labeled_slider(inner_cam, "Max Resolution Size", self.parent.var_camera_max_size, 0, 2560, lambda v: "Native Size" if v == 0 else f"{v}px").pack(fill="x", pady=6)
+        self.parent.make_labeled_slider(inner_cam, "Max FPS Limit", self.parent.var_camera_fps, 0, 60, lambda v: "Auto" if v == 0 else f"{v} FPS").pack(fill="x", pady=6)
+        self.parent.make_labeled_slider(inner_cam, "Camera Zoom", self.parent.var_camera_zoom, 1, 8, lambda v: f"{v}.0x" if v == int(v) else f"{v}x").pack(fill="x", pady=6)
+
+    def build_mic_tab(self):
+        frame = self.tab_frames["Mic"]
+        
+        mic_card = self.parent.make_card(frame, "Audio Settings", "Configure options when capturing microphone audio.")
+        mic_card.pack(fill="x")
+        
+        inner_mic = ctk.CTkFrame(mic_card, fg_color="transparent")
+        inner_mic.pack(fill="x", padx=20, pady=(6, 12))
+        
+        r_codec = ctk.CTkFrame(inner_mic, fg_color="transparent")
+        r_codec.pack(fill="x", pady=6)
+        self.parent.make_labeled_combo_row(r_codec, "Audio Codec", self.parent.var_audio_codec, ["opus", "aac", "raw"], width=180, label_width=120).pack(side="left")
+        
+        self.parent.make_checkbox(inner_mic, "Mute Device Audio Forwarding", self.parent.var_no_audio).pack(anchor="w", pady=12)
+
+    def detect_lenses(self):
+        self.btn_refresh_lenses.configure(text="⏳ Scanning...", state="disabled")
+        
+        def run_detect():
+            serial = self.parent.get_selected_device()
+            cmd = [self.parent.scrcpy_exe, "--list-cameras"]
+            if serial:
+                cmd.extend(["-s", serial])
+            
+            self.parent.console_mgr.log("INFO", f"Lens scan | Executing: {subprocess.list2cmdline(cmd)}")
+            
+            try:
+                CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+                process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
+                output = process.stdout + "\n" + process.stderr
+                
+                lenses = []
+                for line in output.splitlines():
+                    match = re.search(r"--camera-id=(\d+)\s*\(([^)]+)\)", line)
+                    if match:
+                        cam_id = match.group(1)
+                        desc = match.group(2)
+                        lenses.append(f"ID {cam_id}: {desc}")
+                        
+                if not lenses:
+                    lenses = ["Default"]
+                else:
+                    lenses.insert(0, "Default")
+                
+                # Check current value, if not in list, set to Default
+                curr_val = self.parent.var_camera_id.get()
+                if curr_val not in lenses:
+                    found = False
+                    for l in lenses:
+                        if l.startswith(f"ID {curr_val}:") or l == curr_val:
+                            self.parent.var_camera_id.set(l)
+                            found = True
+                            break
+                    if not found:
+                        self.parent.var_camera_id.set("Default")
+                        
+                if not self.winfo_exists():
+                    return
+                self.after(0, lambda: self.update_lens_combo(lenses))
+            except Exception as e:
+                self.parent.console_mgr.log("ERROR", f"Lens scan failed: {e}")
+                if self.winfo_exists():
+                    self.after(0, lambda: self.update_lens_combo(["Default"]))
+                
+        threading.Thread(target=run_detect, daemon=True).start()
+
+    def update_lens_combo(self, lenses):
+        if not self.winfo_exists():
+            return
+        try:
+            if self.camera_lens_combo.winfo_exists():
+                self.camera_lens_combo.configure(values=lenses)
+            if self.btn_refresh_lenses.winfo_exists():
+                self.btn_refresh_lenses.configure(text="🔄 Detect", state="normal")
+        except Exception:
+            pass
+
+    def apply_and_close(self):
+        active_tab = self.tab_var.get()
+        if active_tab == "Screen":
+            self.parent.var_source.set("screen")
+        elif active_tab == "Camera":
+            self.parent.var_source.set("camera")
+        elif active_tab == "Mic":
+            self.parent.var_source.set("mic_only")
+            
+        config.save_config(self.parent, self.parent.config_file)
+        self.parent.refresh_dashboard_state()
+        self.destroy()
 
 
 # --- CUSTOM TITLE BAR ---
@@ -740,22 +1051,33 @@ class ScrcpyGUI:
             "screen": "Screen mirror",
             "camera_back": "Back camera",
             "camera_front": "Front camera",
+            "camera": "Camera lens",
             "mic_only": "Microphone only",
         }
         source_label = source_labels.get(self.var_source.get(), "Screen mirror")
         self.source_summary_var.set(f"{source_label} | Renderer {self.renderer_combo_val.get()}")
         
-        self.source_metric_var.set({"screen": "Screen", "camera_back": "Back Cam", "camera_front": "Front Cam", "mic_only": "Mic Only"}.get(self.var_source.get(), "Screen"))
+        self.source_metric_var.set({"screen": "Screen", "camera_back": "Back Cam", "camera_front": "Front Cam", "camera": "Camera", "mic_only": "Mic Only"}.get(self.var_source.get(), "Screen"))
         self.source_metric_detail_var.set(f"{self.renderer_combo_val.get().title()} renderer")
 
         bitrate = self.var_bitrate.get().strip() or "8"
-        fps = self.var_max_fps.get().strip()
-        size = self.var_max_size.get().strip()
-        fps_label = "Auto FPS" if not fps or fps == "0" else f"{fps} FPS"
-        size_label = "Native size" if not size or size == "0" else f"{size}px max"
-        self.quality_summary_var.set(f"{bitrate} Mbps | {fps_label} | {size_label} | {self.var_video_codec.get().upper()}")
+        
+        if self.var_screen_mode.get() == "OTG" and self.var_source.get() == "screen":
+            self.quality_summary_var.set("OTG Mode (No Video/Audio)")
+        elif self.var_source.get() in ("camera_back", "camera_front", "camera"):
+            fps = self.var_camera_fps.get().strip()
+            size = self.var_camera_max_size.get().strip()
+            fps_label = "Auto FPS" if not fps or fps == "0" else f"{fps} FPS"
+            size_label = "Native size" if not size or size == "0" else f"{size}px max"
+            self.quality_summary_var.set(f"{bitrate} Mbps | {fps_label} | {size_label} | CAMERA")
+        else:
+            fps = self.var_max_fps.get().strip()
+            size = self.var_max_size.get().strip()
+            fps_label = "Auto FPS" if not fps or fps == "0" else f"{fps} FPS"
+            size_label = "Native size" if not size or size == "0" else f"{size}px max"
+            self.quality_summary_var.set(f"{bitrate} Mbps | {fps_label} | {size_label} | {self.var_video_codec.get().upper()}")
 
-        if self.var_source.get() in ("camera_back", "camera_front"):
+        if self.var_source.get() in ("camera_back", "camera_front", "camera"):
             audio_label = "Audio muted for camera mode"
         else:
             audio_label = "Audio Muted" if self.var_no_audio.get() else f"Audio: {self.var_audio_codec.get().upper()}"
@@ -1175,6 +1497,21 @@ class ScrcpyGUI:
         
         self.btn_start = self.make_primary_button(header_actions, "▶  Start Mirroring", self.start_scrcpy)
         self.btn_start.pack(side="right", padx=(10, 0))
+        
+        self.btn_gear = ctk.CTkButton(
+            header_actions,
+            text="",
+            image=get_ctk_icon("advanced", size=(20, 20)),
+            width=40,
+            height=40,
+            fg_color=COLOR_FIELD_BG,
+            hover_color=COLOR_CARD_HOVER,
+            border_color=COLOR_BORDER,
+            border_width=1,
+            corner_radius=8,
+            command=self.open_quick_settings
+        )
+        self.btn_gear.pack(side="right", padx=(0, 0))
 
         # Page Frames Container
         self.body_container = ctk.CTkFrame(workspace, fg_color="transparent")
@@ -1253,8 +1590,8 @@ class ScrcpyGUI:
         # Double column layout
         grid_frame = ctk.CTkFrame(canvas, fg_color="transparent")
         grid_frame.pack(fill="both", expand=True)
-        grid_frame.grid_columnconfigure(0, weight=3) # Left column (USB & Wireless Setup)
-        grid_frame.grid_columnconfigure(1, weight=2) # Right column (Readouts & Help)
+        grid_frame.grid_columnconfigure(0, weight=8) # Left column (USB & Wireless Setup)
+        grid_frame.grid_columnconfigure(1, weight=1) # Right column (Readouts & Help)
 
         col1 = ctk.CTkFrame(grid_frame, fg_color="transparent")
         col1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
@@ -2165,6 +2502,9 @@ class ScrcpyGUI:
                 self.root.after(0, lambda: self.set_status(f"Mirroring exited with code {return_code}."))
         self.active_processes = [p for p in self.active_processes if p.poll() is None]
 
+
+    def open_quick_settings(self):
+        QuickSettingsDialog(self)
 
     # --- SCRCPY LAUNCH PROCESS ---
     def start_scrcpy(self):

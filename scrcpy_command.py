@@ -29,12 +29,19 @@ def build_scrcpy_command(settings: dict) -> list:
     scrcpy_exe = settings.get("scrcpy_exe", "scrcpy")
     device_serial = settings.get("device_serial", "")
     
+    # --- Check for OTG mode first ---
+    if settings.get("screen_mode") == "OTG":
+        cmd = [scrcpy_exe, "--otg"]
+        if device_serial:
+            cmd.extend(["-s", device_serial])
+        return cmd
+
     cmd = [scrcpy_exe]
     if device_serial:
         cmd.extend(["-s", device_serial])
         
     source = settings.get("source", "screen")
-    is_camera = (source == "camera_back" or source == "camera_front")
+    is_camera = (source == "camera_back" or source == "camera_front" or source == "camera")
     is_mic_only = (source == "mic_only")
 
     # --- SOURCE LOGIC ---
@@ -42,10 +49,24 @@ def build_scrcpy_command(settings: dict) -> list:
         cmd.extend(["--no-video", "--audio-source=mic"])
     elif is_camera:
         cmd.append("--video-source=camera")
-        if source == "camera_back":
-            cmd.append("--camera-facing=back")
+        
+        # Check camera lens ID selection
+        camera_id_setting = settings.get("camera_id", "Default")
+        if camera_id_setting and camera_id_setting != "Default":
+            if camera_id_setting.startswith("ID "):
+                try:
+                    camera_id = camera_id_setting.split(":")[0].replace("ID ", "").strip()
+                except Exception:
+                    camera_id = camera_id_setting
+            else:
+                camera_id = camera_id_setting
+            cmd.append(f"--camera-id={camera_id}")
         else:
-            cmd.append("--camera-facing=front")
+            if source == "camera_back":
+                cmd.append("--camera-facing=back")
+            elif source == "camera_front":
+                cmd.append("--camera-facing=front")
+                
         cmd.append("--no-audio") 
         
         cam_ar = settings.get("cam_ar", "Full Sensor (Default)")
@@ -59,9 +80,32 @@ def build_scrcpy_command(settings: dict) -> list:
             cmd.append("--orientation=180")
         elif "270" in cam_orient:
             cmd.append("--orientation=270")
+
+        # Camera Torch
+        if settings.get("camera_torch", False):
+            cmd.append("--camera-torch")
+
+        # Camera Zoom
+        cam_zoom = settings.get("camera_zoom", "1.0").strip()
+        if cam_zoom and cam_zoom != "1.0":
+            cmd.extend(["--camera-zoom", cam_zoom])
+
+        # Camera Resolution Limit
+        cam_max_size = settings.get("camera_max_size", "0").strip()
+        if cam_max_size and cam_max_size != "0":
+            cmd.extend(["--max-size", cam_max_size])
+
+        # Camera FPS Limit
+        cam_fps = settings.get("camera_fps", "30").strip()
+        if cam_fps and cam_fps != "0":
+            cmd.extend(["--max-fps", cam_fps])
+
+        # Camera Bitrate
+        bitrate = settings.get("bitrate", "8").strip()
+        if bitrate: cmd.extend(["--video-bit-rate", f"{bitrate}M"])
     
     # --- VIDEO & AUDIO SETTINGS ---
-    if not is_mic_only: 
+    if not is_mic_only and not is_camera: 
         bitrate = settings.get("bitrate", "8").strip()
         if bitrate: cmd.extend(["--video-bit-rate", f"{bitrate}M"])
         
