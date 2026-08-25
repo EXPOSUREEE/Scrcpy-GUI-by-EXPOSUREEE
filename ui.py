@@ -357,6 +357,11 @@ class SavedDeviceDialog(ctk.CTkToplevel):
         self.geometry(f"{self.width}x{self.height}")
         self.resizable(False, False)
         
+        try:
+            self.iconbitmap(parent.root.wm_iconbitmap())
+        except Exception:
+            pass
+        
         # Modal configuration
         self.transient(parent.root)
         self.grab_set()
@@ -435,6 +440,11 @@ class QuickSettingsDialog(ctk.CTkToplevel):
         self.height = 580
         self.geometry(f"{self.width}x{self.height}")
         self.resizable(False, False)
+        
+        try:
+            self.iconbitmap(parent.root.wm_iconbitmap())
+        except Exception:
+            pass
         
         # Modal configuration
         self.transient(parent.root)
@@ -598,7 +608,7 @@ class QuickSettingsDialog(ctk.CTkToplevel):
         
         self.parent.make_labeled_slider(inner_cam, "Max Resolution Size", self.parent.var_camera_max_size, 0, 2560, lambda v: "Native Size" if v == 0 else f"{v}px").pack(fill="x", pady=6)
         self.parent.make_labeled_slider(inner_cam, "Max FPS Limit", self.parent.var_camera_fps, 0, 60, lambda v: "Auto" if v == 0 else f"{v} FPS").pack(fill="x", pady=6)
-        self.parent.make_labeled_slider(inner_cam, "Camera Zoom", self.parent.var_camera_zoom, 1, 8, lambda v: f"{v}.0x" if v == int(v) else f"{v}x").pack(fill="x", pady=6)
+        self.parent.make_labeled_input_row(inner_cam, "Camera Zoom Level", self.parent.var_camera_zoom, placeholder="1.0", width=60).pack(anchor="w", pady=4)
 
     def build_mic_tab(self):
         frame = self.tab_frames["Mic"]
@@ -701,6 +711,12 @@ class AutoRecoverDialog(ctk.CTkToplevel):
         self.title(f"Auto-Recover: {self.dev_name}")
         self.geometry("400x200")
         self.resizable(False, False)
+        
+        try:
+            self.iconbitmap(parent.root.wm_iconbitmap())
+        except Exception:
+            pass
+        
         self.grab_set()
         
         self.update_idletasks()

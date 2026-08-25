@@ -128,6 +128,7 @@ class AssetManager:
             if os.path.exists(icon_path):
                 try:
                     self.root.iconbitmap(icon_path)
+                    self.root.iconbitmap(default=icon_path)
                     return
                 except Exception:
                     pass
