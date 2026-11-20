@@ -76,43 +76,49 @@ ApplicationWindow {
                     }
                     Type { visible: !shell.narrow; text: "Scrcpy Deck"; font.pixelSize: 17; font.bold: true }
                 }
-                Repeater {
-                    model: shell.names
-                    Button {
-                        id: nav; required property int index; required property string modelData
-                        objectName: "nav" + index
-                        readonly property bool selected: shell.page === index
-                        Layout.fillWidth: true; Layout.preferredHeight: shell.shortWindow ? 36 : 42
-                        Layout.topMargin: index === 3 ? (shell.shortWindow ? 10 : 22) : 0
-                        leftPadding: shell.narrow ? 0 : 11
-                        rightPadding: leftPadding
-                        hoverEnabled: true
-                        Accessible.name: modelData
-                        Accessible.selected: selected
-                        ToolTip.visible: shell.narrow && hovered; ToolTip.text: modelData
-                        onClicked: shell.page = index
-                        background: Rectangle {
-                            radius: shell.narrow ? height / 2 : 11
-                            color: nav.selected ? (shell.narrow ? Theme.accentFill : Theme.accentSoft)
-                                                : nav.hovered ? Theme.hover : "transparent"
-                            border.color: nav.visualFocus ? Theme.accent : "transparent"
-                            border.width: nav.visualFocus ? 2 : 1
+                component NavButton: Button {
+                    id: nav
+                    property int targetIndex: 0
+                    objectName: "nav" + targetIndex
+                    readonly property bool selected: shell.page === targetIndex
+                    Layout.fillWidth: true; Layout.preferredHeight: shell.shortWindow ? 36 : 42
+                    leftPadding: shell.narrow ? 0 : 11
+                    rightPadding: leftPadding
+                    hoverEnabled: true
+                    Accessible.name: shell.names[targetIndex]
+                    Accessible.selected: selected
+                    ToolTip.visible: shell.narrow && hovered; ToolTip.text: shell.names[targetIndex]
+                    onClicked: shell.page = targetIndex
+                    background: Rectangle {
+                        radius: shell.narrow ? height / 2 : 11
+                        color: nav.selected ? (shell.narrow ? Theme.accentFill : Theme.accentSoft)
+                                            : nav.hovered ? Theme.hover : "transparent"
+                        border.color: nav.visualFocus ? Theme.accent : "transparent"
+                        border.width: nav.visualFocus ? 2 : 1
+                    }
+                    contentItem: RowLayout {
+                        spacing: 11
+                        Glyph {
+                            Layout.fillWidth: shell.narrow; name: shell.glyphs[nav.targetIndex]; size: 18
+                            color: nav.selected ? (shell.narrow ? Theme.accentText : Theme.accent) : Theme.muted
                         }
-                        contentItem: RowLayout {
-                            spacing: 11
-                            Glyph {
-                                Layout.fillWidth: shell.narrow; name: shell.glyphs[nav.index]; size: 18
-                                color: nav.selected ? (shell.narrow ? Theme.accentText : Theme.accent) : Theme.muted
-                            }
-                            Type {
-                                visible: !shell.narrow; Layout.fillWidth: true; text: nav.modelData
-                                font.weight: nav.selected ? Font.DemiBold : Font.Medium
-                                color: nav.selected ? Theme.accent : Theme.muted
-                            }
+                        Type {
+                            visible: !shell.narrow; Layout.fillWidth: true; text: shell.names[nav.targetIndex]
+                            font.weight: nav.selected ? Font.DemiBold : Font.Medium
+                            color: nav.selected ? Theme.accent : Theme.muted
                         }
                     }
                 }
+
+                Repeater {
+                    model: [0, 1, 2]
+                    NavButton { required property int modelData; targetIndex: modelData }
+                }
                 Item { Layout.fillHeight: true }
+                Repeater {
+                    model: [3, 4]
+                    NavButton { required property int modelData; targetIndex: modelData }
+                }
                 DeckButton {
                     visible: !!deck.state.update; Layout.fillWidth: true
                     primary: true

@@ -163,9 +163,50 @@ Sheet {
         Card {
             title: "Session preview"; glyph: "monitor"; Layout.preferredWidth: 308; Layout.fillHeight: true
             inset: page.cardInset; spacing: page.cardSpacing
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                Type { Layout.fillWidth: true; text: "Source"; quiet: true; font.pixelSize: 13 }
+                Rectangle {
+                    id: sourcePill
+                    implicitHeight: 28
+                    implicitWidth: sourceRow.implicitWidth + 18
+                    radius: 7
+                    color: sourceMouse.pressed ? Theme.accentPressed : sourceMouse.containsMouse ? Theme.accentHover : Theme.accentSoft
+                    border.color: Theme.accent
+                    border.width: 1
+                    RowLayout {
+                        id: sourceRow
+                        anchors.centerIn: parent
+                        spacing: 6
+                        Glyph {
+                            name: "switch"
+                            size: 14
+                            color: Theme.accent
+                        }
+                        Type {
+                            text: Theme.sourceName(deck.settings.source) + (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG" ? " · OTG" : "")
+                            font.pixelSize: 12
+                            font.bold: true
+                            color: Theme.accent
+                        }
+                    }
+                    MouseArea {
+                        id: sourceMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        ToolTip.visible: containsMouse
+                        ToolTip.text: "Click to switch source: Screen → Camera → Mic"
+                        onClicked: {
+                            var current = deck.settings.source;
+                            var next = current === "screen" ? "camera" : current.startsWith("camera") ? "mic_only" : "screen";
+                            deck.configure("source", next);
+                        }
+                    }
+                }
+            }
             Repeater {
                 model: [
-                    ["Source", Theme.sourceName(deck.settings.source) + (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG" ? " · OTG" : "")],
                     ["Video", page.otg || page.mic ? "Off" : deck.settings.bitrate + " Mbps · " + (page.fps === "0" ? "Auto" : page.fps) + " fps"],
                     ["Maximum size", page.otg || page.mic ? "—" : page.sizeLimit === "0" ? "Native size" : page.sizeLimit + " px"],
                     ["Audio", page.otg || page.camera || (deck.settings.no_audio && !page.mic) ? "Off" : deck.settings.audio_codec.toUpperCase()],

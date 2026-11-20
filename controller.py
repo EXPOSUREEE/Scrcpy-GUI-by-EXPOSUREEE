@@ -14,7 +14,7 @@ from PySide6.QtCore import QObject, Property, QStandardPaths, QTimer, Signal, Sl
 from PySide6.QtGui import QGuiApplication
 
 from adb import AdbManager, DeviceError, HIDDEN
-from assets import APP_DIR, RESOURCES, VERSION, child_environment, executable
+from assets import APP_DIR, RESOURCES, VERSION, child_environment, executable, get_writable_runtime
 from config import DEFAULTS, SettingsStore, normalize
 from console import ConsoleModel, infer_fix_hint
 from library import address, endpoint, merge_devices
@@ -22,7 +22,10 @@ from processes import ProcessRunner
 from scrcpy_command import build_scrcpy_command
 from updater import (
     download_installer,
+    extract_scrcpy_archive,
+    find_latest_scrcpy_release,
     find_latest_update,
+    get_installed_scrcpy_version,
     launch_installer_and_restart,
 )
 from workflows import Connections
@@ -39,6 +42,9 @@ class Deck(QObject):
     _updateFound = Signal(object)
     _updateProgress = Signal(int)
     _updateStatusChanged = Signal(str, str)
+    _scrcpyChecked = Signal(object)
+    _scrcpyProgress = Signal(int)
+    _scrcpyStatusChanged = Signal(str, str)
 
     def __init__(self, profile=None, app_dir=APP_DIR):
         super().__init__()
@@ -46,25 +52,36 @@ class Deck(QObject):
         profile = profile or Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation)) / "config.json"
         self.store = SettingsStore(profile, self.app_dir / "config.json")
         self.logs = ConsoleModel()
-        self._state = dict(status="Ready", error="", busy=False, devices=[], serial="",
-                           tcpSerial="", port="", lenses=["Default"], recovering=False,
-                           update="", updateStatus="", updateProgress=0, updateError="",
-                           updateSize=0, sessions=0)
-        self._guides = json.loads((RESOURCES / "data/guides.json").read_text(encoding="utf-8"))
         self.adb = AdbManager(executable("adb"), RESOURCES, self.logs.log)
         self.scrcpy = executable("scrcpy")
+        self.scrcpy_version = get_installed_scrcpy_version(self.scrcpy) or "5.0.1"
         self.env = child_environment(self.adb.exe, self.scrcpy)
         self.stop = Event()
         self.wireless = Connections(self.adb, self.stop)
         self._closed = False
         self._update_info = None
         self._update_cancel = Event()
+        self._scrcpy_info = None
+        self._scrcpy_cancel = Event()
+        self._state = dict(status="Ready", error="", busy=False, devices=[], serial="",
+                           tcpSerial="", port="", lenses=["Default"], recovering=False,
+                           update="", updateStatus="", updateProgress=0, updateError="",
+                           updateSize=0, sessions=0,
+                           scrcpyVersion=self.scrcpy_version,
+                           scrcpyLatest="",
+                           scrcpyStatus="",
+                           scrcpyProgress=0,
+                           scrcpyError="")
+        self._guides = json.loads((RESOURCES / "data/guides.json").read_text(encoding="utf-8"))
         self.runner = ProcessRunner(self.env, self.logs.log, self._processExited.emit)
         self._completed.connect(self._finish, Qt.QueuedConnection)
         self._processExited.connect(self._exited, Qt.QueuedConnection)
         self._updateFound.connect(self._on_update_found, Qt.QueuedConnection)
         self._updateProgress.connect(lambda p: self._change(updateProgress=p), Qt.QueuedConnection)
         self._updateStatusChanged.connect(self._on_update_status_changed, Qt.QueuedConnection)
+        self._scrcpyChecked.connect(self._on_scrcpy_checked, Qt.QueuedConnection)
+        self._scrcpyProgress.connect(lambda p: self._change(scrcpyProgress=p), Qt.QueuedConnection)
+        self._scrcpyStatusChanged.connect(self._on_scrcpy_status_changed, Qt.QueuedConnection)
         self.timer = QTimer(self, interval=350, singleShot=True)
         self.timer.timeout.connect(self.save)
         self.logs.log("INFO", "Console ready.")
@@ -492,6 +509,90 @@ class Deck(QObject):
     def cancelUpdate(self):
         self._update_cancel.set()
 
+    def _on_scrcpy_checked(self, info):
+        if self._closed:
+            return
+        if info:
+            self._scrcpy_info = info
+            latest = info["version"]
+            status = "available" if info.get("has_update") else "up-to-date"
+            self.logs.log("INFO", f"Genymobile/scrcpy: current v{self.scrcpy_version}, latest v{latest} ({status}).")
+            self._change(scrcpyLatest=latest, scrcpyStatus=status, scrcpyError="")
+        else:
+            self._change(scrcpyStatus="error", scrcpyError="Could not fetch release from Genymobile/scrcpy.")
+
+    def _on_scrcpy_status_changed(self, status, error=""):
+        if self._closed:
+            return
+        self._change(scrcpyStatus=status, scrcpyError=error)
+
+    @Slot()
+    def checkScrcpyUpdate(self):
+        if self._closed or self._state.get("scrcpyStatus") == "downloading":
+            return
+        self._change(scrcpyStatus="checking", scrcpyError="")
+        def check():
+            try:
+                info = find_latest_scrcpy_release(self.scrcpy_version)
+                if not self._closed:
+                    self._scrcpyChecked.emit(info)
+            except Exception as exc:
+                if not self._closed:
+                    self.logs.log("WARN", f"Scrcpy release check failed: {exc}")
+                    self._scrcpyStatusChanged.emit("error", str(exc))
+        Thread(target=check, daemon=True).start()
+
+    @Slot()
+    def installScrcpyUpdate(self):
+        if self._closed or not self._scrcpy_info:
+            return
+        if self._state.get("scrcpyStatus") == "downloading":
+            return
+        self._scrcpy_cancel.clear()
+        self._change(scrcpyStatus="downloading", scrcpyProgress=0, scrcpyError="")
+
+        def run_update():
+            try:
+                temp_dir = Path(tempfile.gettempdir()) / "ScrcpyDeckUpdate"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                zip_name = self._scrcpy_info.get("asset_name") or "scrcpy.zip"
+                zip_path = temp_dir / zip_name
+                url = self._scrcpy_info["download_url"]
+
+                self.logs.log("INFO", f"Downloading scrcpy core {self._scrcpy_info['version']} from {url}...")
+                success = download_installer(
+                    url,
+                    zip_path,
+                    on_progress=lambda pct: self._scrcpyProgress.emit(pct),
+                    cancel_event=self._scrcpy_cancel,
+                )
+                if not success:
+                    if self._scrcpy_cancel.is_set():
+                        self.logs.log("INFO", "Scrcpy download cancelled.")
+                        self._scrcpyStatusChanged.emit("available", "")
+                    else:
+                        self.logs.log("ERROR", "Scrcpy download failed.")
+                        self._scrcpyStatusChanged.emit("error", "Download failed.")
+                    return
+
+                self.logs.log("INFO", "Extracting scrcpy runtime binaries...")
+                self._scrcpyStatusChanged.emit("installing", "")
+                target_dir = get_writable_runtime()
+                extract_scrcpy_archive(zip_path, target_dir)
+
+                # Reinitialize scrcpy and adb paths
+                self.scrcpy = executable("scrcpy")
+                self.adb = AdbManager(executable("adb"), RESOURCES, self.logs.log)
+                self.env = child_environment(self.adb.exe, self.scrcpy)
+                self.scrcpy_version = get_installed_scrcpy_version(self.scrcpy) or self._scrcpy_info["version"]
+                self.logs.log("INFO", f"Scrcpy updated successfully to v{self.scrcpy_version}!")
+                self._change(scrcpyVersion=self.scrcpy_version, scrcpyStatus="installed", scrcpyProgress=100)
+            except Exception as exc:
+                self.logs.log("ERROR", f"Scrcpy update failed: {exc}")
+                self._scrcpyStatusChanged.emit("error", str(exc))
+
+        Thread(target=run_update, daemon=True).start()
+
     def startup(self):
         self.scan()
         self.checkForUpdates()
@@ -501,5 +602,6 @@ class Deck(QObject):
         self._closed = True
         self.stop.set()
         self._update_cancel.set()
+        self._scrcpy_cancel.set()
         self.timer.stop()
         self.save()

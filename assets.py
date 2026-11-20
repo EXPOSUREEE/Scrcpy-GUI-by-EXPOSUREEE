@@ -9,8 +9,27 @@ APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else RESO
 VERSION = "4.0.1"
 
 
+def get_writable_runtime():
+    """Return a directory suitable for storing updated runtime binaries."""
+    app_runtime = APP_DIR / "runtime"
+    try:
+        app_runtime.mkdir(parents=True, exist_ok=True)
+        test_file = app_runtime / ".write_test"
+        test_file.write_text("ok", encoding="utf-8")
+        test_file.unlink(missing_ok=True)
+        return app_runtime
+    except OSError:
+        pass
+
+    user_data = Path(os.environ.get("SCRCPY_DECK_PROFILE_DIR") or
+                     Path(os.environ.get("LOCALAPPDATA", "")) / "ScrcpyDeck")
+    user_runtime = user_data / "runtime"
+    user_runtime.mkdir(parents=True, exist_ok=True)
+    return user_runtime
+
+
 def executable(name):
-    for directory in (APP_DIR / "runtime", APP_DIR):
+    for directory in (get_writable_runtime(), APP_DIR / "runtime", APP_DIR):
         candidate = directory / (name + ".exe")
         if candidate.is_file():
             return str(candidate)

@@ -11,19 +11,21 @@ import urllib.request
 
 GITHUB_REPO = "Yavagu/Scrcpy-GUI-by-EXPOSUREEE"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+SCRCPY_REPO = "Genymobile/scrcpy"
 
 
 def parse_version(text):
-    """Extract a 3-part version tuple (major, minor, patch) from text.
+    """Extract a version tuple (major, minor, patch) from text.
 
-    Supports formats like '4.0.0', 'v4.0.1', 'ScrcpyDeck 4.0.2', etc.
-    Returns (major, minor, patch) as ints, or None if no 3-part version is found.
+    Supports formats like '4.0.0', 'v4.0.1', '3.1', 'v3.1', 'ScrcpyDeck 4.0.2', etc.
+    Returns (major, minor, patch) as ints, or None if no valid version is found.
     """
     if not text:
         return None
-    match = re.search(r"\bv?(\d+)\.(\d+)\.(\d+)\b", str(text), re.IGNORECASE)
+    match = re.search(r"\bv?(\d+)\.(\d+)(?:\.(\d+))?\b", str(text), re.IGNORECASE)
     if match:
-        return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        patch = int(match.group(3)) if match.group(3) is not None else 0
+        return (int(match.group(1)), int(match.group(2)), patch)
     return None
 
 
@@ -118,6 +120,99 @@ def find_latest_update(current_version_str, repo=GITHUB_REPO, timeout=6):
 
     newer_releases.sort(key=lambda r: r["version_tuple"], reverse=True)
     return newer_releases[0]
+
+
+def get_installed_scrcpy_version(scrcpy_exe):
+    """Query the local scrcpy executable for its version string."""
+    if not scrcpy_exe or not Path(scrcpy_exe).is_file():
+        return ""
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        res = subprocess.run(
+            [str(scrcpy_exe), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=creationflags,
+        )
+        output = res.stdout + "\n" + res.stderr
+        m = re.search(r"scrcpy\s+v?(\d+\.\d+(?:\.\d+)?)", output, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def find_latest_scrcpy_release(current_version_str="", repo=SCRCPY_REPO, timeout=6):
+    """Check Genymobile/scrcpy GitHub releases for the latest Windows release."""
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "ScrcpyDeck-Updater",
+            "Accept": "application/vnd.github.v3+json",
+        },
+    )
+
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        rel = json.loads(resp.read().decode("utf-8"))
+
+    tag = rel.get("tag_name", "")
+    name = rel.get("name", "")
+    rel_ver = parse_version(tag) or parse_version(name)
+    if not rel_ver:
+        return None
+
+    current_ver = parse_version(current_version_str)
+
+    # Prioritize 64-bit windows zip archive
+    zip_asset = None
+    for asset in rel.get("assets", []):
+        asset_name = asset.get("name", "")
+        if "win64" in asset_name.lower() and asset_name.lower().endswith(".zip"):
+            zip_asset = asset
+            break
+
+    if not zip_asset:
+        for asset in rel.get("assets", []):
+            if asset.get("name", "").lower().endswith(".zip"):
+                zip_asset = asset
+                break
+
+    if not zip_asset:
+        return None
+
+    vm = re.search(r"(\d+\.\d+(?:\.\d+)?)", tag) or re.search(r"(\d+\.\d+(?:\.\d+)?)", name)
+    latest_str = vm.group(1) if vm else format_version(rel_ver)
+    has_update = (rel_ver > current_ver) if current_ver else True
+
+    return {
+        "version_tuple": rel_ver,
+        "version": latest_str,
+        "tag_name": tag,
+        "release_name": name,
+        "asset_name": zip_asset["name"],
+        "download_url": zip_asset["browser_download_url"],
+        "size": zip_asset.get("size", 0),
+        "html_url": rel.get("html_url", f"https://github.com/{repo}/releases"),
+        "has_update": has_update,
+    }
+
+
+def extract_scrcpy_archive(zip_path, target_runtime_dir):
+    """Extract scrcpy distribution zip into target_runtime_dir."""
+    import zipfile
+    target = Path(target_runtime_dir).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path) as z:
+        for info in z.infolist():
+            if not info.is_dir():
+                parts = Path(info.filename).parts
+                filename = parts[-1] if len(parts) > 1 else parts[0]
+                dest = target / filename
+                dest.write_bytes(z.read(info))
 
 
 def download_installer(url, target_path, on_progress=None, cancel_event=None, timeout=60):

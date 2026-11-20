@@ -8,8 +8,169 @@ Sheet {
     Flow {
         Layout.fillWidth: true; spacing: 6
         Repeater {
-            model: ["USB debugging", "Resources", "Videos", "FAQ"]
-            DeckButton { required property string modelData; text: modelData; selected: page.section === text; onClicked: page.section = text }
+            model: ["USB debugging", "Updates", "Resources", "Videos", "FAQ"]
+            DeckButton {
+                required property string modelData
+                text: modelData
+                selected: page.section === text
+                onClicked: {
+                    page.section = text
+                    if (text === "Updates" && !deck.state.scrcpyStatus) {
+                        deck.checkScrcpyUpdate()
+                    }
+                }
+            }
+        }
+    }
+    Card {
+        visible: page.section === "Updates"; title: "Scrcpy Deck updates"; glyph: "deck"
+        Type {
+            Layout.fillWidth: true; wrapMode: Text.Wrap
+            text: "Keep the Scrcpy Deck desktop application updated with the latest features, improvements, and bug fixes."
+            quiet: true
+        }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 16
+            ColumnLayout {
+                spacing: 2
+                Type { text: "Installed version"; font.pixelSize: 12; quiet: true }
+                Type { text: "v" + deck.version; font.weight: Font.DemiBold; font.pixelSize: 15 }
+            }
+            Rectangle { implicitWidth: 1; implicitHeight: 32; color: Theme.line }
+            ColumnLayout {
+                spacing: 2
+                Type { text: "Latest release"; font.pixelSize: 12; quiet: true }
+                Type {
+                    text: deck.state.update ? ("v" + deck.state.update + " (Update available)")
+                        : (deck.state.updateStatus === "checking" ? "Checking…" : ("v" + deck.version + " (Latest)"))
+                    color: deck.state.update ? Theme.accent : Theme.text
+                    font.weight: Font.DemiBold; font.pixelSize: 15
+                }
+            }
+        }
+        Rectangle {
+            visible: deck.state.updateStatus === "downloading"
+            Layout.fillWidth: true; implicitHeight: 8; radius: 4; color: Theme.input
+            Rectangle {
+                width: parent.width * Math.max(0, Math.min(1, (deck.state.updateProgress || 0) / 100))
+                height: parent.height; radius: 4; color: Theme.accentFill
+            }
+        }
+        Type {
+            visible: deck.state.updateStatus === "downloading"
+            Layout.fillWidth: true; quiet: true
+            text: "Downloading update… " + deck.state.updateProgress + "%"
+        }
+        Type {
+            visible: deck.state.updateStatus === "installing"
+            Layout.fillWidth: true; font.bold: true; color: Theme.accent
+            text: "Installing update and restarting Scrcpy Deck…"
+        }
+        Type {
+            visible: deck.state.updateStatus === "error"
+            Layout.fillWidth: true; color: Theme.danger; wrapMode: Text.Wrap
+            text: "Update error: " + deck.state.updateError
+        }
+        Type {
+            visible: !deck.state.update && deck.state.updateStatus !== "checking" && deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing" && deck.state.updateStatus !== "error"
+            Layout.fillWidth: true; color: Theme.positive
+            text: "✓ Scrcpy Deck is up to date."
+        }
+        Flow {
+            Layout.fillWidth: true; spacing: 8
+            DeckButton {
+                text: "Check for updates"; glyph: "refresh"
+                enabled: deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing"
+                onClicked: deck.checkForUpdates()
+            }
+            DeckButton {
+                visible: !!deck.state.update
+                primary: true; text: "Install update v" + deck.state.update; glyph: "download"
+                enabled: deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing"
+                onClicked: deck.installUpdate()
+            }
+            DeckButton {
+                text: "Releases on GitHub"; glyph: "globe"
+                onClicked: Qt.openUrlExternally("https://github.com/EXPOSUREEE/ScrcpyDeck-Desktop/releases")
+            }
+        }
+    }
+    Card {
+        visible: page.section === "Updates"; title: "Scrcpy core engine updates"; glyph: "tools"
+        Type {
+            Layout.fillWidth: true; wrapMode: Text.Wrap
+            text: "Scrcpy is the open-source screen and camera mirroring engine by Genymobile. Check for and install the latest scrcpy binary distribution directly into your local runtime."
+            quiet: true
+        }
+        RowLayout {
+            Layout.fillWidth: true; spacing: 16
+            ColumnLayout {
+                spacing: 2
+                Type { text: "Installed runtime"; font.pixelSize: 12; quiet: true }
+                Type { text: deck.state.scrcpyVersion ? ("v" + deck.state.scrcpyVersion) : ("v" + deck.scrcpy_version); font.weight: Font.DemiBold; font.pixelSize: 15 }
+            }
+            Rectangle { implicitWidth: 1; implicitHeight: 32; color: Theme.line }
+            ColumnLayout {
+                spacing: 2
+                Type { text: "Latest on GitHub"; font.pixelSize: 12; quiet: true }
+                Type {
+                    text: deck.state.scrcpyLatest ? ("v" + deck.state.scrcpyLatest + (deck.state.scrcpyStatus === "available" ? " (Update available)" : " (Up to date)"))
+                        : (deck.state.scrcpyStatus === "checking" ? "Checking…" : "Not checked")
+                    color: deck.state.scrcpyStatus === "available" ? Theme.accent : Theme.text
+                    font.weight: Font.DemiBold; font.pixelSize: 15
+                }
+            }
+        }
+        Rectangle {
+            visible: deck.state.scrcpyStatus === "downloading"
+            Layout.fillWidth: true; implicitHeight: 8; radius: 4; color: Theme.input
+            Rectangle {
+                width: parent.width * Math.max(0, Math.min(1, (deck.state.scrcpyProgress || 0) / 100))
+                height: parent.height; radius: 4; color: Theme.accentFill
+            }
+        }
+        Type {
+            visible: deck.state.scrcpyStatus === "downloading"
+            Layout.fillWidth: true; quiet: true
+            text: "Downloading scrcpy core binaries… " + deck.state.scrcpyProgress + "%"
+        }
+        Type {
+            visible: deck.state.scrcpyStatus === "installing"
+            Layout.fillWidth: true; font.bold: true; color: Theme.accent
+            text: "Extracting binaries into runtime directory…"
+        }
+        Type {
+            visible: deck.state.scrcpyStatus === "installed"
+            Layout.fillWidth: true; color: Theme.positive; font.bold: true
+            text: "✓ Scrcpy runtime updated successfully to v" + deck.state.scrcpyVersion + "!"
+        }
+        Type {
+            visible: deck.state.scrcpyStatus === "up-to-date"
+            Layout.fillWidth: true; color: Theme.positive
+            text: "✓ Scrcpy runtime is up to date."
+        }
+        Type {
+            visible: deck.state.scrcpyStatus === "error"
+            Layout.fillWidth: true; color: Theme.danger; wrapMode: Text.Wrap
+            text: "Scrcpy update error: " + deck.state.scrcpyError
+        }
+        Flow {
+            Layout.fillWidth: true; spacing: 8
+            DeckButton {
+                text: "Check scrcpy update"; glyph: "refresh"
+                enabled: deck.state.scrcpyStatus !== "downloading" && deck.state.scrcpyStatus !== "installing"
+                onClicked: deck.checkScrcpyUpdate()
+            }
+            DeckButton {
+                visible: deck.state.scrcpyStatus === "available"
+                primary: true; text: "Install scrcpy v" + deck.state.scrcpyLatest; glyph: "download"
+                enabled: deck.state.scrcpyStatus !== "downloading" && deck.state.scrcpyStatus !== "installing"
+                onClicked: deck.installScrcpyUpdate()
+            }
+            DeckButton {
+                text: "Genymobile scrcpy repo"; glyph: "globe"
+                onClicked: Qt.openUrlExternally("https://github.com/Genymobile/scrcpy/releases")
+            }
         }
     }
     Card {

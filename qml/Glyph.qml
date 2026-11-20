@@ -39,7 +39,8 @@ Item {
         copy: "M8 8H20V21H8Z M4 16V3H16",
         trash: "M4 6H20 M9 6V3H15V6 M6 6L7 21H17L18 6 M10 10V17 M14 10V17",
         check: "M5 12L10 17L19 7",
-        circle: "M20 12A8 8 0 1 1 4 12A8 8 0 0 1 20 12Z"
+        circle: "M20 12A8 8 0 1 1 4 12A8 8 0 0 1 20 12Z",
+        switch: "M16 4L20 8L16 12 M20 8H4 M8 20L4 16L8 12 M4 16H20"
     })
 
     Shape {
