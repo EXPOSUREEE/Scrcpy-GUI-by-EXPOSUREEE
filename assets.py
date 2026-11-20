@@ -6,7 +6,7 @@ import sys
 
 RESOURCES = Path(__file__).resolve().parent
 APP_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else RESOURCES
-VERSION = "4.0.1"
+VERSION = "4.0.2"
 
 
 def get_writable_runtime():
