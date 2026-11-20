@@ -44,12 +44,6 @@ The default profile is `%LOCALAPPDATA%\Scrcpy Deck\config.json`. On first run, D
 
 Changes are saved after a short debounce and flushed on normal exit. Writes replace the profile atomically. A per-profile lock prevents two desktop instances from overwriting each other. Pairing codes are transient and are sent to ADB through stdin.
 
-The migration branch is `qt-quick-desktop`. The following command opens the CustomTkinter version at commit `fc5162f` in a separate checkout.
-
-```powershell
-git worktree add --detach ..\ScrcpyDeck-CustomTkinter fc5162f
-```
-
 ## Application structure
 
 | Location | Responsibility |
