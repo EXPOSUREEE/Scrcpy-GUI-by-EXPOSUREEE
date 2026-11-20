@@ -2,9 +2,11 @@
 from dataclasses import asdict
 import json
 import math
+import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from threading import Event, Thread
 import urllib.request
 
@@ -18,6 +20,11 @@ from console import ConsoleModel, infer_fix_hint
 from library import address, endpoint, merge_devices
 from processes import ProcessRunner
 from scrcpy_command import build_scrcpy_command
+from updater import (
+    download_installer,
+    find_latest_update,
+    launch_installer_and_restart,
+)
 from workflows import Connections
 
 
@@ -29,7 +36,9 @@ class Deck(QObject):
     paired = Signal()
     _completed = Signal(object, object, str)
     _processExited = Signal(str, int)
-    _updateFound = Signal(str)
+    _updateFound = Signal(object)
+    _updateProgress = Signal(int)
+    _updateStatusChanged = Signal(str, str)
 
     def __init__(self, profile=None, app_dir=APP_DIR):
         super().__init__()
@@ -39,7 +48,8 @@ class Deck(QObject):
         self.logs = ConsoleModel()
         self._state = dict(status="Ready", error="", busy=False, devices=[], serial="",
                            tcpSerial="", port="", lenses=["Default"], recovering=False,
-                           update="", sessions=0)
+                           update="", updateStatus="", updateProgress=0, updateError="",
+                           updateSize=0, sessions=0)
         self._guides = json.loads((RESOURCES / "data/guides.json").read_text(encoding="utf-8"))
         self.adb = AdbManager(executable("adb"), RESOURCES, self.logs.log)
         self.scrcpy = executable("scrcpy")
@@ -47,10 +57,14 @@ class Deck(QObject):
         self.stop = Event()
         self.wireless = Connections(self.adb, self.stop)
         self._closed = False
+        self._update_info = None
+        self._update_cancel = Event()
         self.runner = ProcessRunner(self.env, self.logs.log, self._processExited.emit)
         self._completed.connect(self._finish, Qt.QueuedConnection)
         self._processExited.connect(self._exited, Qt.QueuedConnection)
-        self._updateFound.connect(lambda v: self._change(update=v), Qt.QueuedConnection)
+        self._updateFound.connect(self._on_update_found, Qt.QueuedConnection)
+        self._updateProgress.connect(lambda p: self._change(updateProgress=p), Qt.QueuedConnection)
+        self._updateStatusChanged.connect(self._on_update_status_changed, Qt.QueuedConnection)
         self.timer = QTimer(self, interval=350, singleShot=True)
         self.timer.timeout.connect(self.save)
         self.logs.log("INFO", "Console ready.")
@@ -389,24 +403,103 @@ class Deck(QObject):
     def copy(self, value):
         QGuiApplication.clipboard().setText(value)
 
-    def startup(self):
-        self.scan()
+    def _on_update_found(self, update):
+        if self._closed:
+            return
+        if update:
+            self._update_info = update
+            version_str = update["version"]
+            self.logs.log("INFO", f"Update available: Scrcpy Deck v{version_str}")
+            self._change(
+                update=version_str,
+                updateStatus="available",
+                updateProgress=0,
+                updateError="",
+                updateSize=update.get("size", 0),
+            )
+        else:
+            self._update_info = None
+            self._change(
+                update="",
+                updateStatus="",
+                updateProgress=0,
+                updateError="",
+                updateSize=0,
+            )
+
+    def _on_update_status_changed(self, status, error=""):
+        if self._closed:
+            return
+        self._change(updateStatus=status, updateError=error)
+
+    @Slot()
+    def checkForUpdates(self):
+        if self._closed or self._state.get("updateStatus") == "downloading":
+            return
         def check():
             try:
-                url = "https://exposureee.in/wp-content/uploads/2024/08/Scrcpy_GUI_by_EXPOSUREEE-Version.txt"
-                with urllib.request.urlopen(url, timeout=4) as response:
-                    version = response.read(128).decode().strip().lstrip("vV")
-                match = re.search(r"\b(\d+(?:\.\d+){1,3})\b", version)
-                if match and not self._closed:
-                    if tuple(map(int, match[1].split("."))) > tuple(map(int, VERSION.split("."))):
-                        self._updateFound.emit(match[1])
-            except (OSError, ValueError):
-                pass
+                update = find_latest_update(VERSION)
+                if not self._closed:
+                    self._updateFound.emit(update)
+            except Exception as exc:
+                self.logs.log("WARN", f"Could not check for updates: {exc}")
         Thread(target=check, daemon=True).start()
+
+    @Slot()
+    def installUpdate(self):
+        if self._closed or not self._update_info:
+            return
+        if self._state.get("updateStatus") == "downloading":
+            return
+        self._update_cancel.clear()
+        self._change(updateStatus="downloading", updateProgress=0, updateError="")
+
+        def run_download():
+            try:
+                temp_dir = Path(tempfile.gettempdir()) / "ScrcpyDeckUpdate"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                installer_name = self._update_info.get("asset_name") or "ScrcpyDeckSetup.exe"
+                installer_path = temp_dir / installer_name
+                url = self._update_info["download_url"]
+
+                self.logs.log("INFO", f"Downloading update v{self._update_info['version']}...")
+                success = download_installer(
+                    url,
+                    installer_path,
+                    on_progress=lambda pct: self._updateProgress.emit(pct),
+                    cancel_event=self._update_cancel,
+                )
+                if not success:
+                    if self._update_cancel.is_set():
+                        self.logs.log("INFO", "Update download cancelled.")
+                        self._updateStatusChanged.emit("available", "")
+                    else:
+                        self.logs.log("ERROR", "Update download failed.")
+                        self._updateStatusChanged.emit("error", "Download failed. Please check network connection.")
+                    return
+
+                self.logs.log("INFO", f"Update downloaded. Launching installer and restarting...")
+                self._updateStatusChanged.emit("installing", "")
+                launch_installer_and_restart(installer_path)
+                QTimer.singleShot(600, QGuiApplication.quit)
+            except Exception as exc:
+                self.logs.log("ERROR", f"Update failed: {exc}")
+                self._updateStatusChanged.emit("error", str(exc))
+
+        Thread(target=run_download, daemon=True).start()
+
+    @Slot()
+    def cancelUpdate(self):
+        self._update_cancel.set()
+
+    def startup(self):
+        self.scan()
+        self.checkForUpdates()
 
     @Slot()
     def shutdown(self):
         self._closed = True
         self.stop.set()
+        self._update_cancel.set()
         self.timer.stop()
         self.save()

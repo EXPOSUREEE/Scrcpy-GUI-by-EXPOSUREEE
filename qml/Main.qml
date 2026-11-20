@@ -116,10 +116,15 @@ ApplicationWindow {
                 Item { Layout.fillHeight: true }
                 DeckButton {
                     visible: !!deck.state.update; Layout.fillWidth: true
-                    glyph: "download"; text: shell.narrow ? "" : "Update " + deck.state.update
-                    Accessible.name: "Update Scrcpy Deck"
+                    primary: true
+                    glyph: "download"
+                    text: shell.narrow ? "" : (deck.state.updateStatus === "downloading" ? ("Downloading " + deck.state.updateProgress + "%")
+                                             : deck.state.updateStatus === "installing" ? "Restarting…"
+                                             : ("Update " + deck.state.update))
+                    enabled: deck.state.updateStatus !== "installing"
+                    Accessible.name: "Update Scrcpy Deck to v" + deck.state.update
                     ToolTip.visible: shell.narrow && hovered; ToolTip.text: Accessible.name
-                    onClicked: Qt.openUrlExternally("https://exposureee.in/scrcpy-gui-by-exposureee/")
+                    onClicked: updateDialog.open()
                 }
                 Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.line }
                 Type { visible: !shell.narrow; Layout.topMargin: 6; Layout.leftMargin: 5; text: "EXPOSUREEE"; font.weight: Font.DemiBold; font.pixelSize: 11; quiet: true }
@@ -149,6 +154,47 @@ ApplicationWindow {
                     primary: true; glyph: "play"; text: "Start session"; compact: shell.compactConnections
                     enabled: !deck.state.busy && (!!deck.state.serial || (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG"))
                     onClicked: deck.launch()
+                }
+            }
+            Rectangle {
+                id: updateBanner
+                visible: !!deck.state.update && deck.state.updateStatus !== "installing"
+                Layout.fillWidth: true; Layout.leftMargin: shell.gutter; Layout.rightMargin: shell.gutter
+                Layout.bottomMargin: 10
+                implicitHeight: 46
+                radius: 10
+                color: Theme.accentSoft
+                border.color: Theme.accent
+                border.width: 1
+                RowLayout {
+                    anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
+                    Glyph { name: "download"; size: 18; color: Theme.accent }
+                    Type {
+                        Layout.fillWidth: true; font.weight: Font.DemiBold
+                        text: deck.state.updateStatus === "downloading"
+                              ? ("Downloading update v" + deck.state.update + " (" + deck.state.updateProgress + "%)…")
+                              : deck.state.updateStatus === "error"
+                              ? ("Update failed: " + (deck.state.updateError || "Could not download"))
+                              : ("Update available: Scrcpy Deck v" + deck.state.update)
+                        color: Theme.text
+                    }
+                    DeckButton {
+                        visible: deck.state.updateStatus !== "downloading"
+                        primary: true; compact: true
+                        text: "Install Update"
+                        onClicked: deck.installUpdate()
+                    }
+                    DeckButton {
+                        visible: deck.state.updateStatus === "downloading"
+                        compact: true
+                        text: "Cancel"
+                        onClicked: deck.cancelUpdate()
+                    }
+                    DeckButton {
+                        compact: true
+                        text: "Details"
+                        onClicked: updateDialog.open()
+                    }
                 }
             }
             Rectangle {
@@ -300,6 +346,58 @@ ApplicationWindow {
                 DeckButton { text: "Edit address"; onClicked: { recovery.close(); shell.openEditor(recovery.target) } }
                 DeckButton { text: "Find on Wi-Fi"; visible: !!(deck.saved[recovery.target] || {}).hardware_serial; onClicked: { recovery.close(); deck.findSaved(recovery.target) } }
                 DeckButton { primary: true; text: "Recover over USB"; onClicked: { recovery.close(); deck.recover(recovery.target) } }
+            }
+        }
+    }
+    DeckDialog {
+        id: updateDialog
+        title: "Software Update"
+        ColumnLayout {
+            width: parent.width; spacing: 14
+            Type {
+                Layout.fillWidth: true
+                text: "A newer version of Scrcpy Deck (v" + deck.state.update + ") is available.\nCurrent version: v" + deck.version
+                color: Theme.text
+            }
+            Rectangle {
+                visible: deck.state.updateStatus === "downloading"
+                Layout.fillWidth: true; implicitHeight: 8; radius: 4; color: Theme.input
+                Rectangle {
+                    width: parent.width * Math.max(0, Math.min(1, (deck.state.updateProgress || 0) / 100))
+                    height: parent.height; radius: 4; color: Theme.accentFill
+                }
+            }
+            Type {
+                visible: deck.state.updateStatus === "downloading"
+                Layout.fillWidth: true; quiet: true
+                text: "Downloading update… " + deck.state.updateProgress + "%"
+            }
+            Type {
+                visible: deck.state.updateStatus === "installing"
+                Layout.fillWidth: true; quiet: true
+                text: "Installing update and restarting Scrcpy Deck…"
+            }
+            Type {
+                visible: deck.state.updateStatus === "error"
+                Layout.fillWidth: true; color: Theme.danger
+                text: "Error: " + deck.state.updateError
+            }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                Item { Layout.fillWidth: true }
+                DeckButton {
+                    text: deck.state.updateStatus === "downloading" ? "Cancel" : "Close"
+                    onClicked: {
+                        if (deck.state.updateStatus === "downloading") deck.cancelUpdate()
+                        updateDialog.close()
+                    }
+                }
+                DeckButton {
+                    visible: deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing"
+                    primary: true
+                    text: "Install Update"
+                    onClicked: deck.installUpdate()
+                }
             }
         }
     }
