@@ -1,5 +1,6 @@
 """Merge live transports with legacy saved device records without losing user edits."""
 import ipaddress
+import re
 
 
 def address(value):
@@ -9,11 +10,27 @@ def address(value):
         raise ValueError("Enter the phone's Wi-Fi IPv4 address.") from exc
 
 
-def endpoint(ip, port):
-    ip = address(ip)
+def endpoint(host, port, *, accept_embedded=False):
+    """Build an ADB endpoint, including addresses pasted into the v4 assisted form."""
+    host = host.strip()
+    if accept_embedded:
+        match = re.fullmatch(r"(\[[^\]]+\]|[^:]+):([^:]*)", host)
+        if match:
+            host, port = match.groups()
+    raw = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        ip = ipaddress.ip_address(raw)
+    except ValueError:
+        labels = host.rstrip(".").split(".")
+        if (len(host) > 253 or re.fullmatch(r"[\d.]+", host) or
+                not all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                        for label in labels)):
+            raise ValueError("Enter a valid Wi-Fi IPv4 address, IPv6 address or hostname.") from None
+    else:
+        host = f"[{ip}]" if ip.version == 6 else str(ip)
     if not port.isascii() or not port.isdecimal() or not 1 <= int(port) <= 65535:
         raise ValueError("Enter a port between 1 and 65535.")
-    return f"{ip}:{port}"
+    return f"{host}:{port}"
 
 
 def _matches(entry, device, ip):

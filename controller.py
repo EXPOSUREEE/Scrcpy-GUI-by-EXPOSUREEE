@@ -226,9 +226,10 @@ class Deck(QObject):
         self._scanned(devices, target, launch)
 
     @Slot(str)
-    def connectWifi(self, port):
+    @Slot(str, bool)
+    def connectWifi(self, port, accept_embedded=False):
         try:
-            target = endpoint(self.store.values["ip"], port)
+            target = endpoint(self.store.values["ip"], port, accept_embedded=accept_embedded)
         except ValueError as exc:
             self._error(str(exc))
             return
@@ -245,7 +246,7 @@ class Deck(QObject):
             return
         if record.get("ip"):
             try:
-                target = endpoint(record["ip"], serial.partition(":")[2] or "5555")
+                target = endpoint(record["ip"], serial.rsplit(":", 1)[1] if ":" in serial else "5555")
             except ValueError as exc:
                 self._error(str(exc))
                 self.recoveryOffered.emit(index)
@@ -254,6 +255,18 @@ class Deck(QObject):
             target = serial
         self._job("Reconnecting saved device…", lambda: self.wireless.connect(target, hardware=record.get("hardware_serial", "")),
                   lambda result: self._connected(result, True), lambda _: self.recoveryOffered.emit(index))
+
+    @Slot(int)
+    def findSaved(self, index):
+        if not 0 <= index < len(self.saved):
+            return
+        hardware = self.saved[index].get("hardware_serial", "")
+        if hardware:
+            def find():
+                target = self.adb.resolve_device_by_serial(hardware, self.stop)
+                return self.wireless.connect(target, hardware=hardware)
+            self._job("Looking for the saved phone on Wi-Fi…", find,
+                      lambda result: self._connected(result, True), lambda _: self.recoveryOffered.emit(index))
 
     @Slot(int)
     def recover(self, index):
@@ -279,7 +292,8 @@ class Deck(QObject):
         record = self.store.saved[index]
         if record.get("type") == "wireless" and ip != record.get("ip", ""):
             try:
-                target = endpoint(ip, record.get("serial", "").partition(":")[2] or "5555")
+                serial = record.get("serial", "")
+                target = endpoint(ip, serial.rsplit(":", 1)[1] if ":" in serial else "5555")
             except ValueError as exc:
                 self._error(str(exc))
                 return False

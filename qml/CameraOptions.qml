@@ -15,4 +15,3 @@ ColumnLayout {
     Limiter { label: "Maximum camera size"; setting: "camera_max_size"; high: 2560; unit: "px"; zero: "Native size" }
     Limiter { label: "Camera frame rate"; setting: "camera_fps"; high: 60; unit: "fps" }
 }
-

@@ -95,18 +95,33 @@ class AdbManager:
         if "successfully paired" not in output.lower():
             raise DeviceError(output or "Pairing failed. Request a fresh code on the phone.")
 
-    def discover(self, ip, cancelled):
+    def _services(self, cancelled):
         for attempt in range(5):
             if cancelled.is_set():
                 break
-            for line in self.run(["mdns", "services"]).splitlines():
+            yield self.run(["mdns", "services"]).splitlines()
+            if attempt < 4:
+                cancelled.wait(1.5)
+
+    def discover(self, ip, cancelled):
+        for lines in self._services(cancelled):
+            for line in lines:
                 if "_adb-tls-connect._tcp" in line:
                     match = re.search(r"\b" + re.escape(ip) + r":(\d+)\b", line)
                     if match:
                         return match[1]
-            if attempt < 4:
-                cancelled.wait(1.5)
         raise DeviceError("No matching mDNS service. Enter the connect port from Wireless debugging.")
+
+    def resolve_device_by_serial(self, hardware, cancelled):
+        """Find an advertised connection service for a previously saved phone."""
+        token = re.compile(r"^adb-" + re.escape(hardware) + r"(?:[-.\s]|$)", re.I)
+        for lines in self._services(cancelled):
+            for line in lines:
+                if token.search(line.strip()) and any(s in line for s in ("_adb-tls-connect._tcp", "_adb._tcp")):
+                    match = re.search(r"\b(\d+\.\d+\.\d+\.\d+:\d+)\b", line)
+                    if match:
+                        return match[1]
+        raise DeviceError("The saved phone is not advertising a Wi-Fi connection. Enable Wireless debugging or recover over USB.")
 
     def reset(self):
         self.run(["disconnect"])

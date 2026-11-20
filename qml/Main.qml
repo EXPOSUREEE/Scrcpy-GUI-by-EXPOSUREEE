@@ -12,6 +12,14 @@ ApplicationWindow {
     visible: true
     title: "Scrcpy Deck"
     color: Theme.base
+    background: Rectangle {
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0; color: "#101617" }
+            GradientStop { position: 0.66; color: "#131b1c" }
+            GradientStop { position: 1; color: "#182723" }
+        }
+    }
     font.family: "Nunito"; font.pixelSize: 14
     palette.window: Theme.base; palette.windowText: Theme.text; palette.text: Theme.text
     palette.button: Theme.panel; palette.buttonText: Theme.text; palette.base: Theme.input
@@ -99,7 +107,11 @@ ApplicationWindow {
                     Type { Layout.fillWidth: true; text: shell.descriptions[shell.page]; quiet: true }
                 }
                 DeckButton { glyph: "\ue713"; Accessible.name: "Quick settings"; ToolTip.visible: hovered; ToolTip.text: "Quick settings"; objectName: "quickButton"; onClicked: shell.openQuick() }
-                DeckButton { primary: true; glyph: "\ue768"; text: "Start session"; enabled: !deck.state.busy; onClicked: deck.launch() }
+                DeckButton {
+                    primary: true; glyph: "\ue768"; text: "Start session"
+                    enabled: !deck.state.busy && (!!deck.state.serial || (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG"))
+                    onClicked: deck.launch()
+                }
             }
             Rectangle {
                 visible: !!deck.state.error
@@ -153,8 +165,10 @@ ApplicationWindow {
         ColumnLayout {
             width: parent.width; spacing: 16
             Type { Layout.fillWidth: true; text: "Check the saved address, or connect the same phone by USB and allow debugging. Recovery reads its current Wi-Fi address and reconnects on port 5555." }
-            RowLayout {
+            Flow {
+                Layout.fillWidth: true; spacing: 6
                 DeckButton { text: "Edit address"; onClicked: { recovery.close(); shell.openEditor(recovery.target) } }
+                DeckButton { text: "Find on Wi-Fi"; visible: !!(deck.saved[recovery.target] || {}).hardware_serial; onClicked: { recovery.close(); deck.findSaved(recovery.target) } }
                 DeckButton { primary: true; text: "Recover over USB"; onClicked: { recovery.close(); deck.recover(recovery.target) } }
             }
         }

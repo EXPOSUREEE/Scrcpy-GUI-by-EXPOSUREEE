@@ -15,7 +15,10 @@ from controller import Deck
 def create_engine(deck):
     """Load the same QML shell for source, packaged and UI test entry points."""
     engine = QQmlApplicationEngine()
-    engine.warnings.connect(lambda errors: [deck.logs.log("WARN", e.toString()) for e in errors])
+    def log_warnings(errors):
+        for error in errors:
+            deck.logs.log("WARN", error.toString())
+    engine.warnings.connect(log_warnings)
     engine.rootContext().setContextProperty("deck", deck)
     engine.rootContext().setContextProperty("consoleLog", deck.logs)
     engine.load(QUrl.fromLocalFile(str(RESOURCES / "qml/Main.qml")))

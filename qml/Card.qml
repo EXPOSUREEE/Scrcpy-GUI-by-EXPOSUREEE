@@ -8,7 +8,7 @@ Rectangle {
     property int inset: 20
     Layout.fillWidth: true
     implicitHeight: body.implicitHeight + inset * 2
-    color: Theme.panel
+    color: "#cf202b2c"
     border.color: Theme.line
     radius: 14
     ColumnLayout {

@@ -86,4 +86,3 @@ class ConsoleModel(QAbstractListModel):
     @Slot(result=str)
     def transcript(self):
         return "\n".join(row[0] for row in self.rows)
-

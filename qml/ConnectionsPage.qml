@@ -10,6 +10,11 @@ Sheet {
     readonly property bool wireless: current ? current.transport === "wireless" : false
     readonly property var blocked: deck.state.devices.find(d => d.state !== "device")
     readonly property bool wide: availableWidth >= 840
+    readonly property bool otg: deck.settings.source === "screen" && deck.settings.screen_mode === "OTG"
+    readonly property bool camera: deck.settings.source.startsWith("camera")
+    readonly property bool mic: deck.settings.source === "mic_only"
+    readonly property string fps: (camera ? deck.settings.camera_fps : deck.settings.max_fps) || "0"
+    readonly property string sizeLimit: (camera ? deck.settings.camera_max_size : deck.settings.max_size) || "0"
     Rectangle {
         Layout.fillWidth: true; implicitHeight: Math.max(172, hero.implicitHeight + 36)
         radius: 15; clip: true; border.color: "#4a665b"
@@ -38,6 +43,7 @@ Sheet {
                 DeckButton { objectName: "scanButton"; text: "Scan devices"; glyph: "\ue72c"; primary: true; enabled: !deck.state.busy; onClicked: deck.scan() }
                 DeckButton { visible: !page.current; text: "Setup guide"; onClicked: page.window.page = 5 }
                 Choice {
+                    enabled: !deck.state.busy
                     visible: page.ready.length > 1; Layout.preferredWidth: Math.min(250, hero.width - 148)
                     model: page.ready; textRole: "display_name"; valueRole: "serial"
                     currentIndex: page.ready.findIndex(d => d.serial === deck.state.serial)
@@ -51,6 +57,7 @@ Sheet {
     GridLayout {
         Layout.fillWidth: true; columns: page.wide ? 2 : 1; rowSpacing: 14; columnSpacing: 14
         Card {
+            enabled: !deck.state.busy
             Layout.alignment: Qt.AlignTop; Layout.preferredWidth: 480
             title: "Wireless connection"; glyph: "\ue701"
             RowLayout {
@@ -74,7 +81,7 @@ Sheet {
             RowLayout {
                 visible: !page.window.direct; Layout.fillWidth: true
                 DeckButton { text: "Enable TCP/IP"; enabled: !!page.current && !deck.state.busy; onClicked: deck.enableTcp() }
-                DeckButton { text: "Connect Wi-Fi"; enabled: !deck.state.busy; onClicked: deck.connectWifi("5555") }
+                DeckButton { text: "Connect Wi-Fi"; enabled: !deck.state.busy; onClicked: deck.connectWifi("5555", true) }
             }
             GridLayout {
                 visible: page.window.direct; Layout.fillWidth: true; columns: 3
@@ -94,10 +101,12 @@ Sheet {
             Repeater {
                 model: [
                     ["Source", Theme.sourceName(deck.settings.source) + (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG" ? " · OTG" : "")],
-                    ["Video", deck.settings.source === "mic_only" ? "Off" : deck.settings.bitrate + " Mbps · " + (deck.settings.source.startsWith("camera") ? deck.settings.camera_fps : deck.settings.max_fps) .replace(/^0$/, "Auto") + " fps"],
-                    ["Audio", deck.settings.source.startsWith("camera") || (deck.settings.no_audio && deck.settings.source !== "mic_only") ? "Off" : deck.settings.audio_codec.toUpperCase()],
-                    ["Window", deck.settings.fullscreen ? "Fullscreen" : deck.settings.borderless ? "Borderless" : "Windowed"],
-                    ["Recording", deck.settings.record ? "MP4 enabled" : "Off"]
+                    ["Video", page.otg || page.mic ? "Off" : deck.settings.bitrate + " Mbps · " + (page.fps === "0" ? "Auto" : page.fps) + " fps"],
+                    ["Maximum size", page.otg || page.mic ? "—" : page.sizeLimit === "0" ? "Native size" : page.sizeLimit + " px"],
+                    ["Audio", page.otg || page.camera || (deck.settings.no_audio && !page.mic) ? "Off" : deck.settings.audio_codec.toUpperCase()],
+                    ["Renderer", page.otg || page.mic ? "—" : deck.settings.renderer],
+                    ["Window", page.otg ? "Control only" : page.mic ? "Audio only" : deck.settings.fullscreen ? "Fullscreen" : deck.settings.borderless ? "Borderless" : "Windowed"],
+                    ["Recording", deck.settings.record && !page.otg ? "MP4 enabled" : "Off"]
                 ]
                 RowLayout {
                     required property var modelData; Layout.fillWidth: true
@@ -110,6 +119,7 @@ Sheet {
     }
     Card {
         title: "Next step"; glyph: "\ue946"
+        visible: !!page.current || !!deck.state.error
         Type {
             Layout.fillWidth: true; quiet: true
             text: deck.state.error ? deck.state.error : page.wireless ? "Your wireless link is ready. Start a session when you’re ready to mirror."
@@ -125,7 +135,7 @@ Sheet {
                     if (deck.state.error) page.window.page = 4
                     else if (!page.current) deck.scan()
                     else if (page.wireless || !deck.settings.ip) deck.launch()
-                    else if (deck.state.tcpSerial === deck.state.serial) deck.connectWifi("5555")
+                    else if (deck.state.tcpSerial === deck.state.serial) deck.connectWifi("5555", true)
                     else deck.enableTcp()
                 }
             }
