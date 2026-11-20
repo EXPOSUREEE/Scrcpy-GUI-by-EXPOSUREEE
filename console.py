@@ -1,7 +1,10 @@
-import re
+"""Bounded, event-driven console output for process and worker diagnostics."""
+from collections import deque
 from datetime import datetime
-import subprocess
-import threading
+from threading import Lock
+
+from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt, Signal, Slot
+
 
 def infer_fix_hint(message):
     lowered = message.lower()
@@ -25,62 +28,62 @@ def infer_fix_hint(message):
         return "Camera or screen capture failed on this resolution/aspect-ratio. Try setting a lower 'Max size' (e.g. 1920 or 1080) in Settings, or check if the camera is already in use by another app."
     return None
 
-def extract_console_level(line):
-    match = re.search(r"\]\s+([A-Z]+)\s", line)
-    if not match:
-        return "OUT"
-    level = match.group(1)
-    if level in {"ERR", "ERROR"}:
-        return "ERROR"
-    return level
 
-class ConsoleManager:
-    def __init__(self, append_callback, script_dir):
-        self.append_callback = append_callback
-        self.script_dir = script_dir
+class ConsoleModel(QAbstractListModel):
+    wake = Signal()
+    limit = 2000
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.pending = deque(maxlen=self.limit)
+        self.lock = Lock()
+        self.wake.connect(self.flush, Qt.QueuedConnection)
+
+    def roleNames(self):
+        return {Qt.UserRole: b"line", Qt.UserRole + 1: b"severity"}
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.rows)
+
+    def data(self, index, role):
+        if index.isValid() and role in (Qt.UserRole, Qt.UserRole + 1):
+            return self.rows[index.row()][role - Qt.UserRole]
+        return None
 
     def log(self, level, message):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"[{timestamp}] {level:<5} {message}\n"
-        self.append_callback(line, level)
+        with self.lock:
+            notify = not self.pending
+            for line in str(message).splitlines():
+                self.pending.append((f"{timestamp}  {level:<5}  {line}", level))
+        if notify:
+            self.wake.emit()
 
-    def log_hint_for_message(self, message):
-        hint = infer_fix_hint(message)
-        if hint:
-            self.log("HINT", hint)
+    @Slot()
+    def flush(self):
+        with self.lock:
+            batch = list(self.pending)
+            self.pending.clear()
+        if not batch:
+            return
+        excess = len(self.rows) + len(batch) - self.limit
+        if excess > 0:
+            self.beginRemoveRows(QModelIndex(), 0, excess - 1)
+            del self.rows[:excess]
+            self.endRemoveRows()
+        self.beginInsertRows(QModelIndex(), len(self.rows), len(self.rows) + len(batch) - 1)
+        self.rows.extend(batch)
+        self.endInsertRows()
 
-    def run_command_async(self, command_text):
-        self.log("INFO", f"Console command | Executing: {command_text}")
-        def task():
-            try:
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                result = subprocess.run(
-                    command_text,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    cwd=self.script_dir,
-                    startupinfo=startupinfo
-                )
-                if result.stdout.strip():
-                    for line in result.stdout.strip().splitlines():
-                        self.log("OUT", line)
-                if result.stderr.strip():
-                    for line in result.stderr.strip().splitlines():
-                        self.log("ERR", line)
-                if result.returncode == 0:
-                    self.log("INFO", f"Console command completed with code {result.returncode}.")
-                else:
-                    summary = f"Console command exited with code {result.returncode}."
-                    self.log("ERROR", summary)
-                    combined = " ".join(
-                        part for part in [command_text, result.stdout.strip(), result.stderr.strip(), summary] if part
-                    )
-                    self.log_hint_for_message(combined)
-            except Exception as e:
-                error_message = f"Console command failed before launch: {e}"
-                self.log("ERROR", error_message)
-                self.log_hint_for_message(error_message)
-        
-        threading.Thread(target=task, daemon=True).start()
+    @Slot()
+    def clear(self):
+        self.flush()
+        self.beginResetModel()
+        self.rows.clear()
+        self.endResetModel()
+
+    @Slot(result=str)
+    def transcript(self):
+        return "\n".join(row[0] for row in self.rows)
+

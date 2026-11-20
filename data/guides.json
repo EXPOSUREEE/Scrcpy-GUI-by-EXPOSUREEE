@@ -1,0 +1,84 @@
+{
+  "videos": [
+    [
+      "I Updated Scrcpy GUI: Now It's Perfect for Android Screen Mirroring",
+      "https://youtu.be/U7byl9CLkU4"
+    ],
+    [
+      "Best Free Android to PC Screen Mirroring Software in 2025",
+      "https://youtu.be/pWKY_dntX5c"
+    ],
+    [
+      "Screen Mirroring of BGMI & Free Fire : Mic / Audio Problem Fixed",
+      "https://youtu.be/I8-rieyx7h8"
+    ],
+    [
+      "I Updated My Android to PC Screen Mirroring Software - No More Errors",
+      "https://youtu.be/-4pRCRFoCZg"
+    ],
+    [
+      "New Android to PC Screen Mirroring Software with Amazing Features",
+      "https://youtu.be/dWj5Mw2k3BE"
+    ],
+    [
+      "Free Android to PC Screen Mirroring Software just for You",
+      "https://youtu.be/WHUsT8Hekoc"
+    ],
+    [
+      "SCRCPY have MORE FEATURES than ApowerMirror & Douwan",
+      "https://youtu.be/smVw6w8bTKk"
+    ]
+  ],
+  "faqs": [
+    [
+      "Q: My phone is not detected when I scan?",
+      "A: Make sure Developer Options are unlocked and 'USB debugging' is enabled on your phone. Re-plug the USB and check for an authorization prompt on your phone's screen."
+    ],
+    [
+      "Q: How do I connect wirelessly?",
+      "A: Connect over USB, choose Get IP, enable TCP/IP and select Connect Wi-Fi. Android 11 and later also support Pair with code."
+    ],
+    [
+      "Q: Why is there no audio playing?",
+      "A: Audio forwarding requires Android 11 or later. Check the mute switch in Display & audio. Camera streams run without audio."
+    ],
+    [
+      "Q: The stream is lagging or pixelated?",
+      "A: In Display & audio, try 4 Mbps or limit the maximum size to 1080 pixels to reduce bandwidth."
+    ]
+  ],
+  "steps": {
+    "Samsung": [
+      "Settings > About Phone > Software Info > Tap Build number 7 times.",
+      "Settings > Developer Options > Enable USB Debugging."
+    ],
+    "Xiaomi": [
+      "Settings > About Phone > Tap MIUI version 7 times.",
+      "Settings > Additional Settings > Developer Options > Enable USB Debugging & Install via USB & USB Debugging (Security Settings)."
+    ],
+    "OnePlus": [
+      "Settings > About Device > Version > Tap Build number 7 times.",
+      "Settings > System/Additional Settings > Developer options > Enable USB debugging."
+    ],
+    "Oppo": [
+      "Settings > About Device > Version > Tap Build number 7 times.",
+      "Settings > Additional Settings > Developer Options > Enable USB Debugging."
+    ],
+    "Vivo": [
+      "Settings > About Phone > Software info > Tap Build number 7 times.",
+      "Settings > System management > Developer options > Enable USB debugging."
+    ],
+    "Realme": [
+      "Settings > About Device > Version > Tap Build number 7 times.",
+      "Settings > Additional Settings > Developer Options > Enable USB Debugging."
+    ],
+    "Motorola": [
+      "Settings > About Phone > Tap Build number 7 times.",
+      "Settings > System > Developer options > Enable USB debugging."
+    ],
+    "Others": [
+      "Check settings for 'Build number' or 'Software version'.",
+      "Find Developer Options, and toggle USB Debugging ON."
+    ]
+  }
+}
