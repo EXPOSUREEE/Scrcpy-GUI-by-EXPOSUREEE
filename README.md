@@ -1,202 +1,81 @@
 # Scrcpy Deck
 
-Scrcpy Deck is a high-performance, cross-subsystem graphical control deck and management interface for Genymobile's [scrcpy](https://github.com/Genymobile/scrcpy) and the Android Debug Bridge (ADB). Engineered in Python and CustomTkinter, Scrcpy Deck eliminates the friction of command-line flag assembly while preserving low-latency screen mirroring, bi-directional input simulation, camera streaming, and device administration.
+Scrcpy Deck is a Windows desktop controller for Android screen mirroring, camera capture, microphone forwarding and USB input. Its PySide6 and Qt Quick interface manages devices and session settings. ADB handles device communication, and scrcpy opens the mirror in its own window.
 
-<p align="center">
-  <img src="assets/preview.png" alt="Scrcpy Deck User Interface" width="880" />
-</p>
+![Scrcpy Deck connection workspace](assets/preview.png)
 
----
+## Run on Windows
 
-## Technical Overview
+For a source checkout, use 64-bit Python 3.11 or later. The application has been run with Python 3.12 on Windows.
 
-Scrcpy Deck bridges high-level desktop user interactions with low-level Android hardware execution pipelines. The application orchestrates headless ADB daemon communication, handles non-blocking multi-process streaming, manages hardware discovery via mDNS, and provides real-time diagnostic stream telemetry.
-
-### Core Architectural Highlights
-
-- **Asynchronous Execution Architecture**: All ADB queries, process monitoring loops, and stream handlers run on isolated background threads, ensuring an unblocked 60 FPS graphical interface.
-- **Hardware-Aware Device Identification**: Integrates deep Android property inspection (`getprop`) across OEM subsystems (Samsung, Xiaomi/HyperOS, OnePlus, Oppo/ColorOS, Vivo, Realme, Motorola) alongside a hardware mapping database to resolve opaque serial identifiers into precise marketing designations.
-- **Dynamic mDNS and Wireless Pairing**: Supports both traditional USB-assisted TCP/IP switching and Android 11+ dynamic TLS pairing protocols (`adb pair` and `adb connect`) with automated port resolution.
-- **Multi-Sensor Camera Subsystem**: Exposes Android 12+ camera streaming pipelines with physical sensor discovery (`--list-cameras`), lens selection, aspect ratio enforcement, torch toggling, digital zoom, and real-time resolution constraints.
-- **Direct Input & OTG Modes**: Supports standard HID injection over mirroring protocols as well as pure USB OTG emulation (`--otg`) for physical keyboard/mouse pass-through without display rendering overhead.
-- **Diagnostic Engine and Telemetry**: Captures standard output and error descriptors in real time, classifying logs into severity streams with an integrated heuristic engine that delivers contextual remediation steps for connection and encoding faults.
-
----
-
-## Feature Matrix
-
-| Category | Capability | Description |
-| :--- | :--- | :--- |
-| **Connectivity** | USB Auto-Discovery | Real-time device polling, state resolution (device, unauthorized, offline), and automatic property extraction. |
-| | USB-Assisted Wi-Fi | Automated local WLAN IP extraction via `ip -f inet addr show wlan0` and port 5555 TCP/IP promotion. |
-| | Android 11+ Wireless Pairing | Native pairing code and ephemeral port negotiation with mDNS service discovery (`_adb-tls-connect._tcp`). |
-| | Saved Devices & Auto-Recovery | Persistent device cache with custom nicknaming and automated USB-assisted IP re-synchronization. |
-| **Display Pipeline** | Bitrate & Framerate | Fine-grained video bitrate allocation (1 to 64 Mbps) and frame capping (Auto, 30, 60, 120 FPS). |
-| | Resolution Scaling | Dynamic downscaling and maximum size boundary enforcement (e.g., 720p, 1080p, 1440p, 2560px). |
-| | Video Codecs | Support for H.264 (AVC), H.265 (HEVC), and AV1 hardware-accelerated encoding pipelines. |
-| | Render Drivers | Configurable rendering backends: Direct3D, OpenGL, Metal, and Software fallback. |
-| | Orientation Controls | Dynamic sync with device orientation or locked aspect enforcement (Portrait @0, Landscape @90, Inverted). |
-| **Audio Subsystem** | Audio Forwarding | Real-time audio streaming via Opus, AAC, or uncompressed RAW PCM buffers (Android 11+). |
-| | Dedicated Microphone Mode | Headless audio forwarding using Android device as an external microphone input (`--no-video --audio-source=mic`). |
-| | Hardware Audio Mute | Option to suppress audio capture while retaining full visual streaming. |
-| **Camera & Capture** | Sensor Selection | Direct identification and targeting of discrete physical lenses (wide, ultra-wide, telephoto, front). |
-| | Camera Tuning | Aspect ratio locking (Sensor, 4:3, 16:9), optical/digital zoom factors, orientation, and flash/torch activation. |
-| | Session Recording | Lossless stream recording directly to timestamped MP4 containers (`recording_YYYYMMDD_HHMMSS.mp4`). |
-| **Hardware & Window** | Power & Screen States | Prevent host/device sleep (`--stay-awake`), physical screen blanking (`--turn-screen-off`), and touch visualization. |
-| | Window Framing | Borderless windowing, true fullscreen display, and always-on-top desktop pinning. |
-| | Input Modes | Full keyboard/mouse control, read-only display mode (`--no-control`), and OTG hardware input mode. |
-| **Diagnostics** | Embedded Terminal | Direct command execution environment within the project workspace supporting PowerShell, ADB, and Scrcpy CLI. |
-| | Heuristic Fix Hints | Automated error analysis engine identifying authorization locks, driver collisions, and port bindings. |
-| | ADB State Reset | Single-click local daemon termination, endpoint disconnects, and ADB key revocation (`~/.android/adbkey`). |
-
----
-
-## System Requirements
-
-### Host Environment (Desktop)
-- **Operating System**: Windows 10 or Windows 11 (64-bit).
-- **Runtime Dependencies**: Python 3.10+ (if running from source).
-- **Graphics Support**: DirectX 11 / OpenGL 3.0 capable GPU (for hardware-accelerated video decoding).
-- **USB Subsystem**: USB 2.0 interface minimum (USB 3.0+ recommended for high-bitrate screen and camera streaming).
-
-### Client Environment (Android Device)
-- **Minimum Android Version**:
-  - Android 5.0 (Lollipop) for basic screen mirroring.
-  - Android 10.0 (Q) for audio forwarding.
-  - Android 11.0 (R) for native wireless pairing without prior USB connection.
-  - Android 12.0 (S) for camera streaming capabilities.
-- **Developer Settings**:
-  - `Developer Options` enabled.
-  - `USB Debugging` enabled.
-  - `Wireless Debugging` enabled (for cord-free operations).
-  - OEM-specific permissions (e.g., `USB debugging (Security settings)` on Xiaomi / HyperOS / MIUI devices).
-
----
-
-## Running from Source
-
-Clone the repository and configure a dedicated virtual environment:
-
-```bash
-# Clone the repository
-git clone https://github.com/xosmos01-cyber/Scrcpy-GUI-by-EXPOSUREEE.git
-cd Scrcpy-GUI-by-EXPOSUREEE
-
-# Initialize and activate Python virtual environment
-python -m venv venv
-venv\Scripts\activate
-
-# Install required Python dependencies
-pip install customtkinter pillow
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python main.py
 ```
 
-Ensure that `adb.exe`, `scrcpy.exe`, `scrcpy-server`, and required runtime DLLs reside in the root directory (or are globally available on your system `PATH`).
+Extract the complete Windows x64 scrcpy distribution into `runtime` beside `main.py` to run device sessions from source. Deck also looks beside the application and on `PATH`. Keep `scrcpy-server` and the upstream DLLs with their executable. Scrcpy Deck uses scrcpy 5.0.1. [Official scrcpy download](https://github.com/Genymobile/scrcpy/releases/tag/v5.0.1)
 
-Execute the application entry point:
+## Connect a phone
 
-```bash
-python main.py
+| Workflow | In Scrcpy Deck |
+| --- | --- |
+| USB | Enable USB debugging on the phone, connect a data cable and accept its authorization prompt. Choose **Scan devices**. If several transports are available, select the intended one in the device card. Choose **Start session**. |
+| USB-assisted Wi-Fi | Keep the cable attached and connect both devices to the same network. Choose **Get IP**, **Enable TCP/IP**, then **Connect Wi-Fi**. Unplug once the wireless transport is selected. |
+| Android 11+ direct pairing | On the phone, open **Developer options → Wireless debugging → Pair device with pairing code**. Under **Pair with code**, enter its IP, pairing port and six-digit code. After pairing, enter the connection port from the main Wireless debugging screen or choose **Detect**. Choose **Connect**. Deck attempts to switch to port 5555 and verifies the selected transport. |
+| Saved devices | Authorized transports appear in **Saved devices**. Edit their nicknames or Wi-Fi addresses, forget an entry, or choose **Connect & start**. If a wireless address has changed, search for the saved hardware identity on Wi-Fi or choose **Recover over USB**. The recovery reads the current IP before restarting the phone's ADB daemon and retains the nickname. |
+| Authorization problems | Open **Help center** for manufacturer-specific instructions. **Stop ADB server** affects other clients of the host daemon. **Reset connections** also removes the current user's ADB keys and restarts the daemon. The app confirms both actions. |
+
+## Configure a session
+
+Open **Quick settings** with the gear or **Ctrl+,**. The Screen, Camera and Mic tabs share their settings with the full pages. **Apply & close** selects the active tab as the capture source. **F5** rescans devices.
+
+- **Display & audio** controls video bitrate, frame cap, maximum size, video and audio codecs, scrcpy’s render driver and screen-audio muting. The mirror render driver is independent of the Qt interface.
+- **Session controls** selects screen, generic camera, front camera, back camera or microphone. Configure orientation, fullscreen, borderless mode, always-on-top, physical screen blanking, touch indicators, stay-awake and read-only viewing here.
+- **Camera** supports lens discovery, aspect ratio, rotation, maximum size, camera FPS, zoom and torch. An explicit lens takes precedence over front/back selection. The phone and scrcpy version determine which capture combinations are available.
+- **Input modes** include the original mirror-and-control behavior, explicit UHID keyboard/mouse input and USB OTG control-only mode. OTG can start with a USB phone that has no ADB authorization. Windows USB driver access is required.
+- **Recording** writes timestamped MP4 files under the user's Videos folder in `Scrcpy Deck`. The console includes the full recording path. Close the scrcpy window to finish the recording.
+- **Console** streams stdout, stderr, exit codes and troubleshooting hints. Run commands in the application directory with the Windows command shell, copy the log or clear it. External debug mode opens scrcpy in its own console.
+- **Help center** includes USB setup checklists for eight manufacturer groups, the original tutorials, FAQs, downloads and creator support.
+
+## Settings and upgrades
+
+The default profile is `%LOCALAPPDATA%\Scrcpy Deck\config.json`. On first run, Deck imports an existing v4 `config.json` beside the source or executable. It preserves all 27 settings, saved device records, nicknames and unknown JSON fields. The old file remains available to the previous frontend. An existing per-user profile takes precedence. Use the `SCRCPY_DECK_PROFILE_DIR` environment variable to run with an isolated profile.
+
+Changes are saved after a short debounce and flushed on normal exit. Writes replace the profile atomically. A per-profile lock prevents two desktop instances from overwriting each other. Pairing codes are transient and are sent to ADB through stdin.
+
+The migration branch is `qt-quick-desktop`. The following command opens the CustomTkinter version at commit `fc5162f` in a separate checkout.
+
+```powershell
+git worktree add --detach ..\ScrcpyDeck-CustomTkinter fc5162f
 ```
 
----
+## Application structure
 
-## Operational Workflows
+| Location | Responsibility |
+| --- | --- |
+| `main.py`, `assets.py` | Qt startup, profile locking, fonts, resources and executable discovery |
+| `qml/` | Responsive application shell, shared controls, six pages and settings dialogs |
+| `controller.py` | Observable application state, UI-thread transitions and serialized background device operations |
+| `adb.py`, `device_names.py` | ADB commands, mDNS, per-transport identity caching and Android marketing names |
+| `workflows.py`, `library.py` | Verified wireless connection, recovery, target selection and saved-record merging |
+| `scrcpy_command.py`, `processes.py` | Argument construction, session launch, subprocess streaming and exit reporting |
+| `config.py`, `console.py` | Backwards-compatible settings store and a bounded, event-driven log model |
+| `data/` | Device name mappings, manufacturer guides, FAQs and video links |
 
-### 1. Wired USB Mirroring
-1. Connect your Android device to the PC using a verified data-capable USB cable.
-2. Ensure `USB Debugging` is active on your device and accept the RSA host authorization prompt when prompted.
-3. Open Scrcpy Deck and navigate to **Quick Connect**.
-4. Click **Scan Devices**. Select your target from the **Active Devices** menu.
-5. Click **Start Mirroring** in the header action bar.
+Device scans retrieve the full Android property set in one subprocess for a newly authorized transport. Later scans reuse its identity until the transport changes. QML loads the selected page on demand. Log updates wake the UI only when there are new lines. The console retains the latest 2,000 lines.
 
-### 2. USB-Assisted Wireless Connection
-1. Connect the device via USB initially.
-2. Under **Quick Connect** > **Wireless ADB (Wi-Fi)**, select the **USB Assisted** mode tab.
-3. Click **Auto get IP** to query the local `wlan0` interface address.
-4. Click **Enable TCP/IP Mode** to instruct the on-device ADB daemon to listen on port 5555.
-5. Click **Connect Wirelessly**. Once confirmed, disconnect the USB cable and click **Start Mirroring**.
+## Windows verification
 
-### 3. Android 11+ Direct Wireless Pairing (No USB Required)
-1. Ensure the desktop PC and Android device reside on the same Wi-Fi subnet.
-2. On the device, navigate to `Settings` > `Developer Options` > `Wireless Debugging` > `Pair device with pairing code`.
-3. In Scrcpy Deck, select **Direct Pairing (Android 11+)**.
-4. Enter the displayed IP address, ephemeral Pair Port, and 6-digit Wi-Fi Pairing Code, then click **Pair Device**.
-5. Read the main connect port displayed on the device's Wireless Debugging root screen (or click **Auto-detect** via mDNS), input it into **Connect Port**, and click **Connect**.
+The migration was exercised on Windows 11 with a Redmi 12 5G running Android 13.
 
-### 4. High-Resolution Camera Streaming
-1. Open **Advanced Controls** (or the quick settings dialog via the gear icon).
-2. Set **Mirror Source** to `Back Camera` or `Front Camera`.
-3. In **Scrcpy Camera Options**, select your target lens ID, desired sensor aspect ratio (e.g., `16:9`), and frame rate limit.
-4. Optional: Enable **Camera Torch** for hardware illumination or adjust **Camera Zoom**.
-5. Click **Start Mirroring** to launch the camera feed without audio overhead.
+| Check | Observed result |
+| --- | --- |
+| Wired sessions | USB mirroring, read-only viewing, UHID mirroring, MP4 finalization, microphone mode and the external debug console completed. OTG selected the phone and its control window closed cleanly. Physical keystrokes and mouse input were outside that check. |
+| Camera | Six lenses enumerated. Front, rear and explicitly selected lens sessions ran. The selected-lens test used a size limit, frame rate, rotation, aspect ratio and zoom. |
+| Wireless | USB-assisted connection, live pairing-code exchange, mDNS port discovery, transition to port 5555, saved-device launch and USB recovery after a failed reconnect succeeded. The phone returned to authorized USB operation afterward. |
+Three source launches per frontend on the same machine gave a median of **1.97 s** for CustomTkinter and **0.57 s** for Qt from process start to a visible window responding to a Windows message. Median process working set three seconds later was **63 MiB** and **172 MiB**, respectively. Qt reported a threaded Direct3D 11 render loop. These are machine-specific observations.
 
-### 5. Pure OTG Peripheral Emulation
-1. Open **Quick Settings** (gear icon) and switch to the **Screen** tab.
-2. Under **Connection Mode**, toggle **OTG (Control Only)**.
-3. Click **Apply & Close** and initiate the session. The desktop keyboard and mouse will control the Android device as native USB HID input devices without video capturing or decoding.
+## License
 
----
-
-## Project Structure
-
-```
-Scrcpy-Deck/
-├── assets/                       # UI visual assets, logos, and application icons
-├── data/
-│   └── device_name_map.json      # OEM vendor-to-marketing name translation table
-├── fonts/                        # Bundled typography (Cascadia Code, Nunito, Quicksand)
-├── adb.py                        # ADB process wrapper, mDNS resolver, and key manager
-├── assets.py                     # Asset loader, dynamic PIL vector icon generator
-├── config.json                   # Saved user configuration and persistent device registry
-├── config.py                     # Configuration state bindings and persistence layer
-├── console.py                    # Real-time console manager and heuristic fault engine
-├── device_names.py               # Android hardware property parser and formatter
-├── main.py                       # High-DPI bootstrapping and application entry point
-├── scrcpy_command.py             # Scrcpy CLI argument synthesis pipeline
-├── ui.py                         # CustomTkinter GUI layout, views, and modal controllers
-└── LICENSE                       # Project distribution license (GPL-3.0)
-```
-
----
-
-## Troubleshooting & Diagnostics
-
-### Common Diagnostic Remediation
-
-- **Device Unauthorized (`unauthorized`)**:
-  - Unlock the Android device.
-  - Check for the "Allow USB debugging?" dialog on the phone screen and tap "Always allow from this computer".
-  - If the prompt does not appear, navigate to **Quick Connect** > **ADB Controls** and click **Reset Connections** to regenerate host RSA keypairs.
-
-- **ADB Daemon / Port Conflicts (`cannot connect to daemon`)**:
-  - Third-party emulators or vendor suites (e.g., Samsung Smart Switch, BlueStacks) may hold locks on port 5037.
-  - Click **Kill ADB Server** in the **ADB Controls** section, or execute `adb kill-server` inside the **Terminal Console**.
-
-- **Dynamic IP Changes on Wireless Reconnect**:
-  - When reconnecting to a saved device whose DHCP lease has changed, Scrcpy Deck triggers the **Auto-Recover** wizard.
-  - Reconnect the phone via USB momentarily; the application will automatically query the new IP, rebind TCP/IP mode, update configuration records, and restore wireless connectivity.
-
-- **Capture or Encoding Initialization Failures**:
-  - High-resolution streams may exceed hardware encoder limits on older mobile chipsets.
-  - Navigate to **Display & Quality** and reduce **Max Resolution Size** to `1080` or `720`, switch the **Video Codec** to `h264`, or lower the **Stream Bitrate**.
-
----
-
-## Contributing
-
-Contributions to improve compatibility across Android variants, optimize rendering pipelines, or extend GUI features are welcome.
-
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feature/enhancement-name`.
-3. Commit your changes following clean code conventions: `git commit -m "feat: implement feature description"`.
-4. Push the branch: `git push origin feature/enhancement-name`.
-5. Open a Pull Request detailing the changes and verification steps.
-
----
-
-## License & Acknowledgments
-
-- **License**: Distributed under the [GNU General Public License v3.0](LICENSE).
-- **Core Engine**: Powered by [Genymobile/scrcpy](https://github.com/Genymobile/scrcpy).
-- **Bridge Tooling**: Powered by the Android Open Source Project (AOSP) ADB utilities.
-- **UI Framework**: Built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) by Tom Schimansky.
+Scrcpy Deck is distributed under GPLv3. The bundled runtime includes upstream scrcpy and ADB components. Nunito and Cascadia Code carry their respective font notices. [Project license](LICENSE) · [Font notices](packaging/licenses)

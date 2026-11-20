@@ -1,0 +1,22 @@
+Scrcpy Deck is distributed under GPLv3. The project license is in _internal/LICENSE.
+
+The Windows application includes CPython, Qt 6, PySide6 Essentials and Shiboken.
+The CPython license is in Python.txt. The Qt and Qt for Python source releases
+and licensing information are available from their respective projects.
+https://www.python.org/downloads/source/
+https://code.qt.io/cgit/qt/qtbase.git/
+https://code.qt.io/cgit/qt/qtdeclarative.git/
+https://code.qt.io/cgit/pyside/pyside-setup.git/
+
+The runtime folder contains the Windows distribution from Genymobile/scrcpy.
+It includes scrcpy, adb, SDL, FFmpeg and libusb. See runtime/LICENSE.txt and
+the upstream sources and build scripts for this release.
+https://github.com/Genymobile/scrcpy/tree/v5.0.1
+https://android.googlesource.com/platform/packages/modules/adb/
+https://github.com/libsdl-org/SDL
+https://ffmpeg.org/
+https://github.com/libusb/libusb
+
+Nunito and Cascadia Code font notices are in Nunito.txt and CascadiaCode.txt.
+The optional Universal ADB Driver installer is published by ClockworkMod.
+https://github.com/koush/UniversalAdbDriver

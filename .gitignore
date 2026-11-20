@@ -19,7 +19,18 @@ __pycache__/
 
 # Local Settings
 config.json
+.android/
+adbkey
+adbkey.pub
 
 # IDEs
 .vscode/
 .idea/
+
+# Local development and installer staging
+.venv/
+venv/
+.pytest_cache/
+installer_output/
+runtime/
+*.msi
