@@ -90,6 +90,11 @@ Sheet {
                 onClicked: deck.installUpdate()
             }
             DeckButton {
+                visible: deck.state.updateStatus === "downloading"
+                text: "Cancel"; glyph: "cancel"
+                onClicked: deck.cancelUpdate()
+            }
+            DeckButton {
                 text: "Releases on GitHub"; glyph: "globe"
                 onClicked: Qt.openUrlExternally("https://github.com/EXPOSUREEE/ScrcpyDeck-Desktop/releases")
             }
@@ -166,6 +171,11 @@ Sheet {
                 primary: true; text: "Install scrcpy v" + deck.state.scrcpyLatest; glyph: "download"
                 enabled: deck.state.scrcpyStatus !== "downloading" && deck.state.scrcpyStatus !== "installing"
                 onClicked: deck.installScrcpyUpdate()
+            }
+            DeckButton {
+                visible: deck.state.scrcpyStatus === "downloading"
+                text: "Cancel"; glyph: "cancel"
+                onClicked: deck.cancelScrcpyUpdate()
             }
             DeckButton {
                 text: "Genymobile scrcpy repo"; glyph: "globe"

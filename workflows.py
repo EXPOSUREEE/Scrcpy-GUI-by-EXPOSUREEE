@@ -8,6 +8,9 @@ class Connections:
         self.adb = adb
         self.cancelled = cancelled
 
+    def set_adb(self, adb):
+        self.adb = adb
+
     def connect(self, target, promote=True, hardware=""):
         self.adb.connect(target)
         if hardware:

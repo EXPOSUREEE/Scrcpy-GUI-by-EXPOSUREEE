@@ -201,18 +201,9 @@ def find_latest_scrcpy_release(current_version_str="", repo=SCRCPY_REPO, timeout
 
 
 def extract_scrcpy_archive(zip_path, target_runtime_dir):
-    """Extract scrcpy distribution zip into target_runtime_dir."""
-    import zipfile
-    target = Path(target_runtime_dir).resolve()
-    target.mkdir(parents=True, exist_ok=True)
-
-    with zipfile.ZipFile(zip_path) as z:
-        for info in z.infolist():
-            if not info.is_dir():
-                parts = Path(info.filename).parts
-                filename = parts[-1] if len(parts) > 1 else parts[0]
-                dest = target / filename
-                dest.write_bytes(z.read(info))
+    """Extract scrcpy distribution zip into target_runtime_dir safely."""
+    from runtime_manager import safe_extract_scrcpy_zip
+    return safe_extract_scrcpy_zip(Path(zip_path), Path(target_runtime_dir))
 
 
 def download_installer(url, target_path, on_progress=None, cancel_event=None, timeout=60):
@@ -258,7 +249,7 @@ def download_installer(url, target_path, on_progress=None, cancel_event=None, ti
 
 
 def get_target_executable():
-    """Locate ScrcpyDeck.exe for relaunch after update."""
+    """Locate ScrcpyDeck.exe for relaunch after update. Returns None if running from source and not found."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve()
 
@@ -271,81 +262,115 @@ def get_target_executable():
     for candidate in candidates:
         if candidate.is_file():
             return candidate.resolve()
-    return Path(sys.executable).resolve()
+    return None
 
 
-def create_update_runner_script(installer_path, target_exe=None):
-    """Create helper scripts (VBScript + fallback BAT) to run the installer and relaunch Scrcpy Deck completely hidden."""
+def create_update_runner_script(installer_path, target_exe=None, pid=None):
+    """Create helper scripts (VBScript + fallback BAT) to wait for old process, run installer, and restart."""
     installer = Path(installer_path).resolve()
     if not installer.is_file():
         raise FileNotFoundError(f"Installer not found: {installer}")
 
-    target = Path(target_exe or get_target_executable()).resolve()
+    target = Path(target_exe or get_target_executable() or "").resolve() if (target_exe or get_target_executable()) else None
     runner_vbs = installer.parent / "scrcpy_deck_update_runner.vbs"
     runner_bat = installer.parent / "scrcpy_deck_update_runner.bat"
+    proc_pid = int(pid) if pid is not None else os.getpid()
+
+    installer_vbs = str(installer).replace('"', '""')
+    target_vbs = str(target).replace('"', '""') if target else ""
+
+    installer_bat = str(installer)
+    target_bat = str(target) if target else ""
 
     # 1. VBScript runner runs natively via wscript.exe without opening any console window
-    vbs_content = f'''Dim WshShell, ret, objWMIService, colProcesses
+    vbs_content = f'''Dim WshShell, ret, objWMIService, colProcesses, fso, waited, pid
 Set WshShell = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+pid = {proc_pid}
 
-' Wait 2 seconds for Scrcpy Deck to close cleanly and release file locks
-WScript.Sleep 2000
+Set objWMIService = GetObject("winmgmts:\\\\.\\root\\cimv2")
 
-' Run installer silently and hidden (0 = SW_HIDE), wait for completion (True)
-ret = WshShell.Run("""{str(installer)}"" /SILENT /FORCECLOSEAPPLICATIONS", 0, True)
-If ret <> 0 Then
-    ' Fallback to normal interactive install if silent mode failed
-    WshShell.Run """{str(installer)}""", 1, True
+' Bounded wait loop for old Scrcpy Deck process to exit (up to 30s)
+waited = 0
+Do While waited < 60
+    Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where ProcessId = " & pid)
+    If colProcesses.Count = 0 Then
+        Exit Do
+    End If
+    WScript.Sleep 500
+    waited = waited + 1
+Loop
+
+' If old process failed to exit cleanly within timeout, abort update safely
+Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where ProcessId = " & pid)
+If colProcesses.Count > 0 Then
+    WScript.Quit 1
 End If
 
-' Allow installation changes to settle
-WScript.Sleep 1500
+' Run installer silently and hidden (0 = SW_HIDE), wait for completion (True)
+ret = WshShell.Run("""{installer_vbs}"" /SILENT /FORCECLOSEAPPLICATIONS", 0, True)
+If ret <> 0 Then
+    ' Fallback to normal interactive install if silent mode failed
+    ret = WshShell.Run("""{installer_vbs}""", 1, True)
+End If
 
-' Check if ScrcpyDeck is already running; if not, restart it
-Set objWMIService = GetObject("winmgmts:\\\\.\\root\\cimv2")
-Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where Name = 'ScrcpyDeck.exe'")
-If colProcesses.Count = 0 Then
-    If CreateObject("Scripting.FileSystemObject").FileExists("""{str(target)}""") Then
-        WshShell.Run """{str(target)}""", 1, False
+' Only restart Scrcpy Deck if the installer succeeded (ret = 0)
+If ret = 0 Then
+    WScript.Sleep 1500
+    Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where Name = 'ScrcpyDeck.exe'")
+    If colProcesses.Count = 0 Then
+        If fso.FileExists("{target_vbs}") Then
+            WshShell.Run """{target_vbs}""", 1, False
+        End If
     End If
 End If
 '''
     runner_vbs.write_text(vbs_content, encoding="utf-8")
 
-    # 2. Batch fallback that also exits cleanly with exit 0 (never hangs or stays open)
+    # 2. Batch fallback with bounded wait and exit code checks
     bat_content = f"""@echo off
 setlocal
 chcp 65001 >nul
 
-:: Wait 2 seconds for Scrcpy Deck to close cleanly and release file locks
-timeout /t 2 /nobreak >nul
+:: Bounded wait loop for old process {proc_pid}
+set /a attempts=0
+:wait_loop
+if %attempts% geq 60 goto abort_timeout
+tasklist /fi "PID eq {proc_pid}" 2>nul | findstr /i "{proc_pid}" >nul
+if errorlevel 1 goto proc_exited
+timeout /t 1 /nobreak >nul
+set /a attempts+=1
+goto wait_loop
 
-:: Run installer silently with forced application closure
-start /wait "" "{str(installer)}" /SILENT /FORCECLOSEAPPLICATIONS
+:abort_timeout
+exit /b 1
+
+:proc_exited
+start /wait "" "{installer_bat}" /SILENT /FORCECLOSEAPPLICATIONS
 if errorlevel 1 (
-    start /wait "" "{str(installer)}"
+    start /wait "" "{installer_bat}"
+)
+if errorlevel 1 (
+    exit /b 1
 )
 
-:: Wait 2 seconds for installation to finalize
 timeout /t 2 /nobreak >nul
-
-:: Check if ScrcpyDeck.exe is running; if not, restart it
 tasklist /fi "imagename eq ScrcpyDeck.exe" 2>nul | find /i "ScrcpyDeck.exe" >nul
 if errorlevel 1 (
-    if exist "{str(target)}" (
-        start "" "{str(target)}"
+    if exist "{target_bat}" (
+        start "" "{target_bat}"
     )
 )
-
 exit 0
 """
     runner_bat.write_text(bat_content, encoding="utf-8")
     return runner_vbs
 
 
-def launch_installer_and_restart(installer_path, target_exe=None):
+def launch_installer_and_restart(installer_path, target_exe=None, pid=None):
     """Launch the installer runner detached and completely hidden so no CMD/PowerShell window opens."""
-    runner_vbs = create_update_runner_script(installer_path, target_exe)
+    proc_pid = int(pid) if pid is not None else os.getpid()
+    runner_vbs = create_update_runner_script(installer_path, target_exe, pid=proc_pid)
     runner_bat = runner_vbs.parent / "scrcpy_deck_update_runner.bat"
 
     if sys.platform == "win32":
@@ -367,7 +392,7 @@ def launch_installer_and_restart(installer_path, target_exe=None):
         else:
             cmd = ["cmd.exe", "/c", str(runner_bat)]
 
-        subprocess.Popen(
+        return subprocess.Popen(
             cmd,
             startupinfo=startupinfo,
             creationflags=creationflags,
@@ -375,4 +400,4 @@ def launch_installer_and_restart(installer_path, target_exe=None):
             shell=False,
         )
     else:
-        subprocess.Popen([str(installer_path)], close_fds=True)
+        return subprocess.Popen([str(installer_path)], close_fds=True)

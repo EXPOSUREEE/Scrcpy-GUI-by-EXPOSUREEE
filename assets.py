@@ -11,6 +11,12 @@ VERSION = "4.0.2"
 
 def get_writable_runtime():
     """Return a directory suitable for storing updated runtime binaries."""
+    profile_override = os.environ.get("SCRCPY_DECK_PROFILE_DIR")
+    if profile_override:
+        user_runtime = Path(profile_override) / "runtime"
+        user_runtime.mkdir(parents=True, exist_ok=True)
+        return user_runtime
+
     app_runtime = APP_DIR / "runtime"
     try:
         app_runtime.mkdir(parents=True, exist_ok=True)
@@ -21,18 +27,27 @@ def get_writable_runtime():
     except OSError:
         pass
 
-    user_data = Path(os.environ.get("SCRCPY_DECK_PROFILE_DIR") or
-                     Path(os.environ.get("LOCALAPPDATA", "")) / "ScrcpyDeck")
+    user_data = Path(os.environ.get("LOCALAPPDATA", "")) / "ScrcpyDeck"
     user_runtime = user_data / "runtime"
     user_runtime.mkdir(parents=True, exist_ok=True)
     return user_runtime
 
 
 def executable(name):
+    from runtime_manager import get_active_runtime_dir
+
+    active_dir = get_active_runtime_dir()
+    if active_dir:
+        for fname in (name + ".exe", name):
+            candidate = active_dir / fname
+            if candidate.is_file():
+                return str(candidate)
+
     for directory in (get_writable_runtime(), APP_DIR / "runtime", APP_DIR):
-        candidate = directory / (name + ".exe")
-        if candidate.is_file():
-            return str(candidate)
+        for fname in (name + ".exe", name):
+            candidate = directory / fname
+            if candidate.is_file():
+                return str(candidate)
     return shutil.which(name) or name
 
 

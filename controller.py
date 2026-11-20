@@ -5,7 +5,9 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from threading import Event, Thread
 import urllib.request
@@ -26,6 +28,7 @@ from updater import (
     find_latest_scrcpy_release,
     find_latest_update,
     get_installed_scrcpy_version,
+    get_target_executable,
     launch_installer_and_restart,
 )
 from workflows import Connections
@@ -42,9 +45,11 @@ class Deck(QObject):
     _updateFound = Signal(object)
     _updateProgress = Signal(int)
     _updateStatusChanged = Signal(str, str)
+    _updateDownloaded = Signal(object)
     _scrcpyChecked = Signal(object)
     _scrcpyProgress = Signal(int)
     _scrcpyStatusChanged = Signal(str, str)
+    _scrcpyPrepared = Signal(object)
 
     def __init__(self, profile=None, app_dir=APP_DIR):
         super().__init__()
@@ -52,17 +57,45 @@ class Deck(QObject):
         profile = profile or Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation)) / "config.json"
         self.store = SettingsStore(profile, self.app_dir / "config.json")
         self.logs = ConsoleModel()
+
+        # Clean up any interrupted update staging directories on startup
+        try:
+            from runtime_manager import cleanup_staging
+            cleanup_staging()
+        except Exception:
+            pass
+
         self.adb = AdbManager(executable("adb"), RESOURCES, self.logs.log)
         self.scrcpy = executable("scrcpy")
-        self.scrcpy_version = get_installed_scrcpy_version(self.scrcpy) or "5.0.1"
+
+        # Resolve installed version from binary or committed active runtime pointer
+        active_version = None
+        try:
+            from runtime_manager import get_active_pointer
+            pointer = get_active_pointer(get_writable_runtime())
+            if pointer and pointer.get("version"):
+                active_version = str(pointer["version"])
+        except Exception:
+            pass
+
+        self.scrcpy_version = (
+            get_installed_scrcpy_version(self.scrcpy)
+            or active_version
+            or "5.0.1"
+        )
         self.env = child_environment(self.adb.exe, self.scrcpy)
         self.stop = Event()
         self.wireless = Connections(self.adb, self.stop)
         self._closed = False
         self._update_info = None
         self._update_cancel = Event()
+        self._update_op_id = 0
         self._scrcpy_info = None
         self._scrcpy_cancel = Event()
+        self._scrcpy_op_id = 0
+        self._pending_scrcpy_runtime = None
+        self._activating_runtime = False
+
         self._state = dict(status="Ready", error="", busy=False, devices=[], serial="",
                            tcpSerial="", port="", lenses=["Default"], recovering=False,
                            update="", updateStatus="", updateProgress=0, updateError="",
@@ -79,9 +112,12 @@ class Deck(QObject):
         self._updateFound.connect(self._on_update_found, Qt.QueuedConnection)
         self._updateProgress.connect(lambda p: self._change(updateProgress=p), Qt.QueuedConnection)
         self._updateStatusChanged.connect(self._on_update_status_changed, Qt.QueuedConnection)
+        self._updateDownloaded.connect(self._on_update_downloaded, Qt.QueuedConnection)
         self._scrcpyChecked.connect(self._on_scrcpy_checked, Qt.QueuedConnection)
         self._scrcpyProgress.connect(lambda p: self._change(scrcpyProgress=p), Qt.QueuedConnection)
         self._scrcpyStatusChanged.connect(self._on_scrcpy_status_changed, Qt.QueuedConnection)
+        self._scrcpyPrepared.connect(self._on_scrcpy_prepared, Qt.QueuedConnection)
+
         self.timer = QTimer(self, interval=350, singleShot=True)
         self.timer.timeout.connect(self.save)
         self.logs.log("INFO", "Console ready.")
@@ -371,6 +407,9 @@ class Deck(QObject):
 
     @Slot()
     def launch(self):
+        if getattr(self, "_activating_runtime", False):
+            self._error("Cannot start session while runtime update is activating.")
+            return
         s = self.settings.copy()
         serial = self._state["serial"]
         otg = s["source"] == "screen" and s["screen_mode"] == "OTG"
@@ -420,6 +459,111 @@ class Deck(QObject):
     def copy(self, value):
         QGuiApplication.clipboard().setText(value)
 
+    def _activate_runtime(self, runtime_dir, version_str=None):
+        """Authoritative main-thread runtime synchronization and activation."""
+        self._activating_runtime = True
+        try:
+            if self._state.get("sessions", 0) > 0:
+                raise RuntimeError(
+                    "Cannot update scrcpy runtime while active mirroring sessions are running. "
+                    "Please close all active sessions and retry."
+                )
+
+            target_dir = Path(runtime_dir).resolve()
+            new_scrcpy = target_dir / "scrcpy.exe"
+            new_adb_exe = target_dir / "adb.exe"
+            new_server = target_dir / "scrcpy-server"
+
+            for f in (new_scrcpy, new_adb_exe, new_server):
+                if not f.is_file():
+                    raise FileNotFoundError(f"Missing required runtime binary: {f}")
+
+            version = (
+                version_str
+                or get_installed_scrcpy_version(new_scrcpy)
+                or self.scrcpy_version
+            )
+
+            # Pre-construct dependencies before mutating active references
+            new_adb = AdbManager(str(new_adb_exe), RESOURCES, self.logs.log)
+            new_env = child_environment(str(new_adb_exe), str(new_scrcpy))
+
+            # Atomic pointer write
+            from runtime_manager import (
+                get_active_pointer,
+                prune_old_versions,
+                write_active_pointer,
+            )
+            from assets import get_writable_runtime
+
+            root = get_writable_runtime()
+            old_pointer = get_active_pointer(root)
+            prev_rel = old_pointer.get("relative_path") if old_pointer else None
+
+            try:
+                rel_path = target_dir.relative_to(root)
+            except ValueError:
+                rel_path = Path("versions") / target_dir.name
+
+            write_active_pointer(root, version, str(rel_path), prev_rel)
+
+            # In-memory dependency synchronization with rollback
+            old_scrcpy = self.scrcpy
+            old_adb = self.adb
+            old_env = self.env
+            old_version = self.scrcpy_version
+            old_runner_env = self.runner.env
+            old_wireless_adb = self.wireless.adb
+
+            try:
+                self.scrcpy = str(new_scrcpy)
+                self.adb = new_adb
+                self.env = new_env
+                self.scrcpy_version = version
+                self.wireless.set_adb(new_adb)
+                self.runner.set_env(new_env)
+
+                # Confirm consistency
+                assert self.scrcpy == str(new_scrcpy)
+                assert self.adb.exe == str(new_adb_exe)
+                assert self.runner.env == new_env
+                assert self.wireless.adb == new_adb
+
+                prune_old_versions(root)
+                self._change(
+                    scrcpyVersion=version,
+                    scrcpyStatus="installed",
+                    scrcpyProgress=100,
+                    scrcpyError="",
+                )
+                self.logs.log(
+                    "INFO",
+                    f"Scrcpy runtime successfully updated and synchronized to v{version}!",
+                )
+                return True
+            except Exception as exc:
+                # Rollback in-memory
+                self.scrcpy = old_scrcpy
+                self.adb = old_adb
+                self.env = old_env
+                self.scrcpy_version = old_version
+                self.wireless.adb = old_wireless_adb
+                self.runner.env = old_runner_env
+                # Rollback active pointer
+                if old_pointer:
+                    try:
+                        write_active_pointer(
+                            root,
+                            old_pointer.get("version", old_version),
+                            old_pointer.get("relative_path"),
+                            old_pointer.get("previous_relative_path"),
+                        )
+                    except Exception:
+                        pass
+                raise exc
+        finally:
+            self._activating_runtime = False
+
     def _on_update_found(self, update):
         if self._closed:
             return
@@ -449,6 +593,52 @@ class Deck(QObject):
             return
         self._change(updateStatus=status, updateError=error)
 
+    @Slot(object)
+    def _on_update_downloaded(self, result):
+        if self._closed:
+            return
+        if not isinstance(result, dict) or result.get("op_id") != self._update_op_id:
+            return
+
+        installer_path = result.get("installer_path")
+        target_exe = get_target_executable()
+
+        if not getattr(sys, "frozen", False):
+            # Running from source mode
+            if not target_exe or target_exe.name.lower() != "scrcpydeck.exe" or not target_exe.is_file():
+                self.logs.log(
+                    "WARN",
+                    "In-app installation requires the packaged Scrcpy Deck application. "
+                    f"Installer downloaded to: {installer_path}",
+                )
+                self._change(
+                    updateStatus="available",
+                    updateError=(
+                        "In-app installation requires the packaged Scrcpy Deck application. "
+                        f"Installer saved to: {installer_path}"
+                    ),
+                )
+                return
+
+        # Prepare and save state before shutdown
+        self.timer.stop()
+        self.save()
+
+        self._change(updateStatus="installing", updateError="")
+        self.logs.log("INFO", "Update downloaded. Launching installer and preparing restart...")
+
+        try:
+            proc = launch_installer_and_restart(installer_path, target_exe, pid=os.getpid())
+            if not proc:
+                raise RuntimeError("Failed to launch installer runner process.")
+        except Exception as exc:
+            self.logs.log("ERROR", f"Installer launch failed: {exc}")
+            self._change(updateStatus="error", updateError=f"Installer launch failed: {exc}")
+            return
+
+        # Clean Qt application shutdown initiated on the main thread
+        QGuiApplication.quit()
+
     @Slot()
     def checkForUpdates(self):
         if self._closed or self._state.get("updateStatus") == "downloading":
@@ -466,20 +656,27 @@ class Deck(QObject):
     def installUpdate(self):
         if self._closed or not self._update_info:
             return
-        if self._state.get("updateStatus") == "downloading":
+        if self._state.get("updateStatus") in ("downloading", "installing"):
             return
+        if self._state.get("scrcpyStatus") in ("downloading", "installing"):
+            self.logs.log("WARN", "Cannot install application update while scrcpy core update is in progress.")
+            return
+
         self._update_cancel.clear()
+        self._update_op_id += 1
+        op_id = self._update_op_id
+        info = dict(self._update_info)
         self._change(updateStatus="downloading", updateProgress=0, updateError="")
 
         def run_download():
             try:
                 temp_dir = Path(tempfile.gettempdir()) / "ScrcpyDeckUpdate"
                 temp_dir.mkdir(parents=True, exist_ok=True)
-                installer_name = self._update_info.get("asset_name") or "ScrcpyDeckSetup.exe"
+                installer_name = info.get("asset_name") or "ScrcpyDeckSetup.exe"
                 installer_path = temp_dir / installer_name
-                url = self._update_info["download_url"]
+                url = info["download_url"]
 
-                self.logs.log("INFO", f"Downloading update v{self._update_info['version']}...")
+                self.logs.log("INFO", f"Downloading update v{info['version']}...")
                 success = download_installer(
                     url,
                     installer_path,
@@ -495,10 +692,12 @@ class Deck(QObject):
                         self._updateStatusChanged.emit("error", "Download failed. Please check network connection.")
                     return
 
-                self.logs.log("INFO", f"Update downloaded. Launching installer and restarting...")
-                self._updateStatusChanged.emit("installing", "")
-                launch_installer_and_restart(installer_path)
-                QTimer.singleShot(600, QGuiApplication.quit)
+                # Worker emits completion to the main thread
+                self._updateDownloaded.emit({
+                    "installer_path": str(installer_path),
+                    "op_id": op_id,
+                    "version": info.get("version"),
+                })
             except Exception as exc:
                 self.logs.log("ERROR", f"Update failed: {exc}")
                 self._updateStatusChanged.emit("error", str(exc))
@@ -508,6 +707,14 @@ class Deck(QObject):
     @Slot()
     def cancelUpdate(self):
         self._update_cancel.set()
+        if self._state.get("updateStatus") == "downloading":
+            self._change(updateStatus="available", updateProgress=0, updateError="Download cancelled.")
+
+    @Slot()
+    def cancelScrcpyUpdate(self):
+        self._scrcpy_cancel.set()
+        if self._state.get("scrcpyStatus") == "downloading":
+            self._change(scrcpyStatus="available", scrcpyProgress=0, scrcpyError="Download cancelled.")
 
     def _on_scrcpy_checked(self, info):
         if self._closed:
@@ -525,6 +732,38 @@ class Deck(QObject):
         if self._closed:
             return
         self._change(scrcpyStatus=status, scrcpyError=error)
+
+    @Slot(object)
+    def _on_scrcpy_prepared(self, result):
+        if self._closed:
+            return
+        if not isinstance(result, dict) or result.get("op_id") != self._scrcpy_op_id:
+            return
+
+        runtime_dir = result.get("runtime_dir")
+        version = result.get("version", "")
+
+        if self._state.get("sessions", 0) > 0:
+            self._pending_scrcpy_runtime = result
+            self.logs.log(
+                "WARN",
+                f"Scrcpy v{version} update is ready, but mirroring sessions are active. Close them to activate.",
+            )
+            self._change(
+                scrcpyStatus="available",
+                scrcpyError=(
+                    f"Scrcpy v{version} is ready to install, but active mirroring sessions are running. "
+                    "Please close them and click Install again."
+                ),
+            )
+            return
+
+        try:
+            self._activate_runtime(runtime_dir, version)
+            self._pending_scrcpy_runtime = None
+        except Exception as exc:
+            self.logs.log("ERROR", f"Scrcpy activation failed: {exc}")
+            self._change(scrcpyStatus="error", scrcpyError=str(exc))
 
     @Slot()
     def checkScrcpyUpdate(self):
@@ -546,20 +785,44 @@ class Deck(QObject):
     def installScrcpyUpdate(self):
         if self._closed or not self._scrcpy_info:
             return
-        if self._state.get("scrcpyStatus") == "downloading":
+        if self._state.get("scrcpyStatus") in ("downloading", "installing"):
             return
+        if self._state.get("updateStatus") in ("downloading", "installing"):
+            self.logs.log("WARN", "Cannot install scrcpy update while Scrcpy Deck application update is in progress.")
+            return
+
+        # Check if already prepared and pending activation due to previous active sessions
+        target_version = self._scrcpy_info.get("version")
+        if (
+            self._pending_scrcpy_runtime
+            and self._pending_scrcpy_runtime.get("version") == target_version
+        ):
+            if self._state.get("sessions", 0) == 0:
+                self._change(scrcpyStatus="installing", scrcpyError="")
+                self._on_scrcpy_prepared(self._pending_scrcpy_runtime)
+                return
+            else:
+                self._change(
+                    scrcpyStatus="available",
+                    scrcpyError="Cannot install while active sessions are running. Close sessions and click Install.",
+                )
+                return
+
         self._scrcpy_cancel.clear()
+        self._scrcpy_op_id += 1
+        op_id = self._scrcpy_op_id
+        info = dict(self._scrcpy_info)
         self._change(scrcpyStatus="downloading", scrcpyProgress=0, scrcpyError="")
 
         def run_update():
             try:
                 temp_dir = Path(tempfile.gettempdir()) / "ScrcpyDeckUpdate"
                 temp_dir.mkdir(parents=True, exist_ok=True)
-                zip_name = self._scrcpy_info.get("asset_name") or "scrcpy.zip"
+                zip_name = info.get("asset_name") or "scrcpy.zip"
                 zip_path = temp_dir / zip_name
-                url = self._scrcpy_info["download_url"]
+                url = info["download_url"]
 
-                self.logs.log("INFO", f"Downloading scrcpy core {self._scrcpy_info['version']} from {url}...")
+                self.logs.log("INFO", f"Downloading scrcpy core {info['version']} from {url}...")
                 success = download_installer(
                     url,
                     zip_path,
@@ -575,18 +838,38 @@ class Deck(QObject):
                         self._scrcpyStatusChanged.emit("error", "Download failed.")
                     return
 
-                self.logs.log("INFO", "Extracting scrcpy runtime binaries...")
-                self._scrcpyStatusChanged.emit("installing", "")
-                target_dir = get_writable_runtime()
-                extract_scrcpy_archive(zip_path, target_dir)
+                if self._scrcpy_cancel.is_set():
+                    self.logs.log("INFO", "Scrcpy update cancelled before staging.")
+                    self._scrcpyStatusChanged.emit("available", "")
+                    return
 
-                # Reinitialize scrcpy and adb paths
-                self.scrcpy = executable("scrcpy")
-                self.adb = AdbManager(executable("adb"), RESOURCES, self.logs.log)
-                self.env = child_environment(self.adb.exe, self.scrcpy)
-                self.scrcpy_version = get_installed_scrcpy_version(self.scrcpy) or self._scrcpy_info["version"]
-                self.logs.log("INFO", f"Scrcpy updated successfully to v{self.scrcpy_version}!")
-                self._change(scrcpyVersion=self.scrcpy_version, scrcpyStatus="installed", scrcpyProgress=100)
+                self.logs.log("INFO", "Staging and validating scrcpy runtime binaries...")
+                self._scrcpyStatusChanged.emit("installing", "")
+
+                from runtime_manager import (
+                    promote_staging_to_version,
+                    stage_and_validate_runtime,
+                )
+
+                staging_dir, detected_version = stage_and_validate_runtime(
+                    zip_path,
+                    expected_version=info.get("version"),
+                )
+
+                if self._scrcpy_cancel.is_set():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    self.logs.log("INFO", "Scrcpy update cancelled after staging.")
+                    self._scrcpyStatusChanged.emit("available", "")
+                    return
+
+                final_dir = promote_staging_to_version(staging_dir, detected_version)
+
+                # Worker emits immutable preparation result to the main thread
+                self._scrcpyPrepared.emit({
+                    "version": detected_version,
+                    "runtime_dir": str(final_dir),
+                    "op_id": op_id,
+                })
             except Exception as exc:
                 self.logs.log("ERROR", f"Scrcpy update failed: {exc}")
                 self._scrcpyStatusChanged.emit("error", str(exc))

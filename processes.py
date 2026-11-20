@@ -12,6 +12,9 @@ class ProcessRunner:
         self.log = log
         self.finished = finished
 
+    def set_env(self, env):
+        self.env = env
+
     def start(self, command, cwd, *, shell=False, debug=False):
         name = "Console" if shell else "scrcpy"
         self.log("INFO", command if shell else subprocess.list2cmdline(command))
