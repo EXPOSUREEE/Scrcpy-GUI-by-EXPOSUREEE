@@ -40,11 +40,11 @@
     ],
     [
       "Q: Why is there no audio playing?",
-      "A: Audio forwarding requires Android 11 or later. Check the mute switch in Display & audio. Camera streams run without audio."
+      "A: Audio forwarding requires Android 11 or later. Check the mute switch in Advance settings. Camera streams run without audio."
     ],
     [
       "Q: The stream is lagging or pixelated?",
-      "A: In Display & audio, try 4 Mbps or limit the maximum size to 1080 pixels to reduce bandwidth."
+      "A: In Advance settings, try 4 Mbps or limit the maximum size to 1080 pixels to reduce bandwidth."
     ]
   ],
   "steps": {

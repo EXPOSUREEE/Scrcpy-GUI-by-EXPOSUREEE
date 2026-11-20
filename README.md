@@ -30,8 +30,7 @@ Extract the complete Windows x64 scrcpy distribution into `runtime` beside `main
 
 Open **Quick settings** with the gear or **Ctrl+,**. The Screen, Camera and Mic tabs share their settings with the full pages. **Apply & close** selects the active tab as the capture source. **F5** rescans devices.
 
-- **Display & audio** controls video bitrate, frame cap, maximum size, video and audio codecs, scrcpy’s render driver and screen-audio muting. The mirror render driver is independent of the Qt interface.
-- **Session controls** selects screen, generic camera, front camera, back camera or microphone. Configure orientation, fullscreen, borderless mode, always-on-top, physical screen blanking, touch indicators, stay-awake and read-only viewing here.
+- **Advance settings** controls capture source, screen quality, video and audio codecs, mirror render driver, screen-audio muting, orientation, window modes, camera parameters, device behaviors, and recording & diagnostics.
 - **Camera** supports lens discovery, aspect ratio, rotation, maximum size, camera FPS, zoom and torch. An explicit lens takes precedence over front/back selection. The phone and scrcpy version determine which capture combinations are available.
 - **Input modes** include the original mirror-and-control behavior, explicit UHID keyboard/mouse input and USB OTG control-only mode. OTG can start with a USB phone that has no ADB authorization. Windows USB driver access is required.
 - **Recording** writes timestamped MP4 files under the user's Videos folder in `Scrcpy Deck`. The console includes the full recording path. Close the scrcpy window to finish the recording.
@@ -49,7 +48,7 @@ Changes are saved after a short debounce and flushed on normal exit. Writes repl
 | Location | Responsibility |
 | --- | --- |
 | `main.py`, `assets.py` | Qt startup, profile locking, fonts, resources and executable discovery |
-| `qml/` | Responsive application shell, shared controls, six pages and settings dialogs |
+| `qml/` | Responsive application shell, shared controls, five pages and settings dialogs |
 | `controller.py` | Observable application state, UI-thread transitions and serialized background device operations |
 | `adb.py`, `device_names.py` | ADB commands, mDNS, per-transport identity caching and Android marketing names |
 | `workflows.py`, `library.py` | Verified wireless connection, recovery, target selection and saved-record merging |

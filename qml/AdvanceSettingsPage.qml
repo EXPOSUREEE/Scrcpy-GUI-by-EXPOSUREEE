@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+
 Sheet {
     id: page
     columns: width >= 800 ? 2 : 1
@@ -24,6 +25,10 @@ Sheet {
             Toggle { text: "Record session to MP4"; setting: "record" }
             Toggle { text: "Open external debug console"; setting: "debug_mode" }
         }
+        Card {
+            title: "Screen quality"; glyph: "monitor"
+            ScreenOptions {}
+        }
     }
     ColumnLayout {
         Layout.fillWidth: true
@@ -36,6 +41,18 @@ Sheet {
             Toggle { text: "Fullscreen"; setting: "fullscreen" }
             Toggle { text: "Borderless window"; setting: "borderless" }
         }
-        Card { title: "Camera"; glyph: "camera"; CameraOptions {} }
+        Card {
+            title: "Encoding & rendering"; glyph: "chip"
+            Option { label: "Video codec"; setting: "video_codec"; options: ["h264", "h265", "av1"] }
+            Option { label: "Mirror render driver"; setting: "renderer"; options: ["auto", "direct3d", "opengl", "metal", "software"] }
+        }
+        Card {
+            title: "Audio forwarding"; glyph: "audio"
+            AudioOptions {}
+        }
+        Card {
+            title: "Camera"; glyph: "camera"
+            CameraOptions {}
+        }
     }
 }

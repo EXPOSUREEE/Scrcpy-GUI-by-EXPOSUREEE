@@ -34,14 +34,13 @@ ApplicationWindow {
     property bool direct: false
     property string pairPort: ""
     property string pairCode: ""
-    readonly property var names: ["Connections", "Saved devices", "Display & audio", "Session controls", "Console", "Help center"]
-    readonly property var glyphs: ["link", "devices", "monitor", "sliders", "terminal", "help"]
-    readonly property var pages: ["ConnectionsPage.qml", "LibraryPage.qml", "DisplayPage.qml", "ControlsPage.qml", "ConsolePage.qml", "HelpPage.qml"]
+    readonly property var names: ["Connections", "Saved devices", "Advance settings", "Console", "Help center"]
+    readonly property var glyphs: ["link", "devices", "sliders", "terminal", "help"]
+    readonly property var pages: ["ConnectionsPage.qml", "LibraryPage.qml", "AdvanceSettingsPage.qml", "ConsolePage.qml", "HelpPage.qml"]
     readonly property var descriptions: [
         "",
         "Reconnect to devices you have used with this computer.",
-        "Set the quality, bandwidth and audio format for your stream.",
-        "Choose a source and configure the behavior of your next session.",
+        "Configure capture source, stream quality, audio and session behavior.",
         "Run local commands and inspect device and session output.",
         "Set up your device and find answers to common questions."
     ]
@@ -84,7 +83,7 @@ ApplicationWindow {
                         objectName: "nav" + index
                         readonly property bool selected: shell.page === index
                         Layout.fillWidth: true; Layout.preferredHeight: shell.shortWindow ? 36 : 42
-                        Layout.topMargin: index === 4 ? (shell.shortWindow ? 10 : 22) : 0
+                        Layout.topMargin: index === 3 ? (shell.shortWindow ? 10 : 22) : 0
                         leftPadding: shell.narrow ? 0 : 11
                         rightPadding: leftPadding
                         hoverEnabled: true
@@ -149,7 +148,6 @@ ApplicationWindow {
                     ToolTip.visible: hovered; ToolTip.text: Accessible.name
                     onClicked: deck.configure("appearance", Theme.dark ? "light" : "dark")
                 }
-                DeckButton { glyph: "sliders"; compact: shell.compactConnections; Accessible.name: "Quick settings"; ToolTip.visible: hovered; ToolTip.text: "Quick settings"; objectName: "quickButton"; onClicked: shell.openQuick() }
                 DeckButton {
                     primary: true; glyph: "play"; text: "Start session"; compact: shell.compactConnections
                     enabled: !deck.state.busy && (!!deck.state.serial || (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG"))
@@ -208,7 +206,7 @@ ApplicationWindow {
                     width: parent.width - 24; x: 12; anchors.verticalCenter: parent.verticalCenter
                     spacing: 10
                     Type { id: message; Layout.fillWidth: true; maximumLineCount: shell.compactConnections ? 2 : 4; wrapMode: Text.Wrap; elide: Text.ElideRight; text: deck.state.error; color: Theme.danger }
-                    DeckButton { visible: shell.page === 0; compact: true; text: "Open console"; onClicked: shell.page = 4 }
+                    DeckButton { visible: shell.page === 0; compact: true; text: "Open console"; onClicked: shell.page = 3 }
                 }
                 HoverHandler { id: errorHover }
                 ToolTip.visible: errorHover.hovered && message.truncated
@@ -239,7 +237,7 @@ ApplicationWindow {
                         ToolTip.text: statusText.text
                     }
                     DeckButton { visible: deck.state.recovering; text: "Cancel recovery"; compact: true; onClicked: deck.cancelRecovery() }
-                    DeckButton { visible: shell.connectionErrorInFooter; text: "Open console"; compact: true; Layout.preferredHeight: 28; onClicked: shell.page = 4 }
+                    DeckButton { visible: shell.connectionErrorInFooter; text: "Open console"; compact: true; Layout.preferredHeight: 28; onClicked: shell.page = 3 }
                     DeckButton {
                         id: adbUtilitiesButton
                         objectName: "adbUtilitiesButton"
