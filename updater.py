@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -179,14 +180,44 @@ def get_target_executable():
 
 
 def create_update_runner_script(installer_path, target_exe=None):
-    """Create a helper batch script to run the installer and relaunch Scrcpy Deck."""
+    """Create helper scripts (VBScript + fallback BAT) to run the installer and relaunch Scrcpy Deck completely hidden."""
     installer = Path(installer_path).resolve()
     if not installer.is_file():
         raise FileNotFoundError(f"Installer not found: {installer}")
 
     target = Path(target_exe or get_target_executable()).resolve()
+    runner_vbs = installer.parent / "scrcpy_deck_update_runner.vbs"
     runner_bat = installer.parent / "scrcpy_deck_update_runner.bat"
 
+    # 1. VBScript runner runs natively via wscript.exe without opening any console window
+    vbs_content = f'''Dim WshShell, ret, objWMIService, colProcesses
+Set WshShell = CreateObject("WScript.Shell")
+
+' Wait 2 seconds for Scrcpy Deck to close cleanly and release file locks
+WScript.Sleep 2000
+
+' Run installer silently and hidden (0 = SW_HIDE), wait for completion (True)
+ret = WshShell.Run("""{str(installer)}"" /SILENT /FORCECLOSEAPPLICATIONS", 0, True)
+If ret <> 0 Then
+    ' Fallback to normal interactive install if silent mode failed
+    WshShell.Run """{str(installer)}""", 1, True
+End If
+
+' Allow installation changes to settle
+WScript.Sleep 1500
+
+' Check if ScrcpyDeck is already running; if not, restart it
+Set objWMIService = GetObject("winmgmts:\\\\.\\root\\cimv2")
+Set colProcesses = objWMIService.ExecQuery("Select * from Win32_Process Where Name = 'ScrcpyDeck.exe'")
+If colProcesses.Count = 0 Then
+    If CreateObject("Scripting.FileSystemObject").FileExists("""{str(target)}""") Then
+        WshShell.Run """{str(target)}""", 1, False
+    End If
+End If
+'''
+    runner_vbs.write_text(vbs_content, encoding="utf-8")
+
+    # 2. Batch fallback that also exits cleanly with exit 0 (never hangs or stays open)
     bat_content = f"""@echo off
 setlocal
 chcp 65001 >nul
@@ -195,9 +226,9 @@ chcp 65001 >nul
 timeout /t 2 /nobreak >nul
 
 :: Run installer silently with forced application closure
-"{str(installer)}" /SILENT /FORCECLOSEAPPLICATIONS
+start /wait "" "{str(installer)}" /SILENT /FORCECLOSEAPPLICATIONS
 if errorlevel 1 (
-    "{str(installer)}"
+    start /wait "" "{str(installer)}"
 )
 
 :: Wait 2 seconds for installation to finalize
@@ -211,20 +242,39 @@ if errorlevel 1 (
     )
 )
 
-:: Clean up runner
-(goto) 2>nul & del "%~f0"
+exit 0
 """
     runner_bat.write_text(bat_content, encoding="utf-8")
-    return runner_bat
+    return runner_vbs
 
 
 def launch_installer_and_restart(installer_path, target_exe=None):
-    """Launch the installer runner detached so current process can quit."""
-    runner_bat = create_update_runner_script(installer_path, target_exe)
+    """Launch the installer runner detached and completely hidden so no CMD/PowerShell window opens."""
+    runner_vbs = create_update_runner_script(installer_path, target_exe)
+    runner_bat = runner_vbs.parent / "scrcpy_deck_update_runner.bat"
+
     if sys.platform == "win32":
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        wscript_exe = shutil.which("wscript.exe") or str(
+            Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "wscript.exe"
+        )
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0  # SW_HIDE
+
+        creationflags = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            | subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+        if Path(wscript_exe).is_file():
+            cmd = [str(wscript_exe), str(runner_vbs)]
+        else:
+            cmd = ["cmd.exe", "/c", str(runner_bat)]
+
         subprocess.Popen(
-            ["cmd.exe", "/c", str(runner_bat)],
+            cmd,
+            startupinfo=startupinfo,
             creationflags=creationflags,
             close_fds=True,
             shell=False,
