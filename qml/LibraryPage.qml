@@ -5,7 +5,7 @@ Sheet {
     id: page
     readonly property var window: ApplicationWindow.window
     Card {
-        visible: !deck.saved.length; title: "Your device library"; glyph: "\ue8f1"
+        visible: !deck.saved.length; title: "Your device library"; glyph: "devices"
         Type { Layout.fillWidth: true; quiet: true; text: "Devices appear here after an authorized USB or wireless connection. Give a device a nickname or reconnect to start its next session." }
         DeckButton { text: "Find devices"; onClicked: { page.window.page = 0; deck.scan() } }
     }
@@ -14,7 +14,7 @@ Sheet {
         Card {
             required property var modelData; required property int index
             title: modelData.nickname || modelData.display_name || modelData.model || "Android device"
-            glyph: modelData.type === "wireless" ? "\ue701" : "\ue88e"
+            glyph: modelData.type === "wireless" ? "wifi" : "phone"
             Type { Layout.fillWidth: true; quiet: true; text: [modelData.nickname ? modelData.display_name : "", modelData.serial || modelData.ip].filter(Boolean).join("   ·   "); font.family: Theme.mono; font.pixelSize: 12 }
             RowLayout {
                 enabled: !deck.state.busy

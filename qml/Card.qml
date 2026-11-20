@@ -5,12 +5,15 @@ Rectangle {
     default property alias contents: body.data
     property string title: ""
     property string glyph: ""
-    property int inset: 20
+    property int inset: 18
+    property alias spacing: body.spacing
     Layout.fillWidth: true
+    Layout.alignment: Qt.AlignTop
+    Layout.preferredWidth: 1
     implicitHeight: body.implicitHeight + inset * 2
-    color: "#cf202b2c"
+    color: Theme.panel
     border.color: Theme.line
-    radius: 14
+    radius: 16
     ColumnLayout {
         id: body
         x: card.inset; y: card.inset; width: card.width - 2 * card.inset
@@ -19,8 +22,15 @@ Rectangle {
             visible: !!card.title
             Layout.fillWidth: true
             spacing: 10
-            Glyph { visible: !!card.glyph; text: card.glyph; font.pixelSize: 18 }
-            Type { Layout.fillWidth: true; text: card.title; font.bold: true; font.pixelSize: 18 }
+            Rectangle {
+                visible: !!card.glyph
+                implicitWidth: card.inset <= 12 ? 24 : 32
+                implicitHeight: implicitWidth
+                radius: 9
+                color: Theme.accentSoft
+                Glyph { anchors.centerIn: parent; name: card.glyph; size: card.inset <= 12 ? 14 : 17 }
+            }
+            Type { Layout.fillWidth: true; text: card.title; font.weight: Font.DemiBold; font.pixelSize: 16 }
         }
     }
 }

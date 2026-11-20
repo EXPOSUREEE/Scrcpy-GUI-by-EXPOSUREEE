@@ -4,100 +4,165 @@ import QtQuick.Layouts
 
 Sheet {
     id: page
+    objectName: "connectionsPage"
     readonly property var window: ApplicationWindow.window
     readonly property var ready: deck.state.devices.filter(d => d.state === "device")
     readonly property var current: ready.find(d => d.serial === deck.state.serial)
     readonly property bool wireless: current ? current.transport === "wireless" : false
     readonly property var blocked: deck.state.devices.find(d => d.state !== "device")
-    readonly property bool wide: availableWidth >= 840
+    readonly property bool compact: window.compactConnections
+    readonly property int cardInset: window.shortWindow ? 12 : compact ? 16 : 18
+    readonly property int cardSpacing: window.shortWindow ? 4 : compact ? 8 : 12
     readonly property bool otg: deck.settings.source === "screen" && deck.settings.screen_mode === "OTG"
     readonly property bool camera: deck.settings.source.startsWith("camera")
     readonly property bool mic: deck.settings.source === "mic_only"
     readonly property string fps: (camera ? deck.settings.camera_fps : deck.settings.max_fps) || "0"
     readonly property string sizeLimit: (camera ? deck.settings.camera_max_size : deck.settings.max_size) || "0"
+    contentSpacing: compact ? 10 : 14
+
     Rectangle {
-        Layout.fillWidth: true; implicitHeight: Math.max(172, hero.implicitHeight + 36)
-        radius: 15; clip: true; border.color: "#4a665b"
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0; color: "#243c32" }
-            GradientStop { position: 0.63; color: "#213a33" }
-            GradientStop { position: 1; color: "#1a302e" }
+        Layout.fillWidth: true
+        implicitHeight: Math.max(page.compact ? 0 : 164, hero.implicitHeight + (page.window.shortWindow ? 18 : 36))
+        radius: 16; color: Theme.panel; border.color: Theme.line
+        SignalArt {
+            width: page.compact ? 0 : Math.min(parent.width * 0.31, 310)
+            height: parent.height - 24
+            anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter
+            visible: !page.compact
+            connected: !!page.current
+            wireless: page.wireless
         }
-        SignalArt { width: parent.width > 570 ? Math.min(parent.width*0.31, 300) : 0; height: parent.height - 4; anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; visible: width > 0 }
-        ColumnLayout {
-            id: hero; x: 22; anchors.verticalCenter: parent.verticalCenter
-            width: parent.width * 0.67 - 30; spacing: 6
-            RowLayout {
-                spacing: 8
-                Rectangle { width: 7; height: 7; radius: 4; color: page.current ? Theme.mint : Theme.amber }
-                Type { text: page.current ? (page.wireless ? "WIRELESS LINK" : "DEVICE LINK") : "DEVICE DISCOVERY"; color: "#c6dfcf"; font.pixelSize: 11; font.bold: true; font.letterSpacing: 1.5 }
+        GridLayout {
+            id: hero
+            anchors.left: parent.left; anchors.leftMargin: page.cardInset
+            anchors.verticalCenter: parent.verticalCenter
+            width: page.compact ? parent.width - 2 * page.cardInset : parent.width * 0.67 - 26
+            columns: page.compact ? 2 : 1; columnSpacing: 12; rowSpacing: 10
+            ColumnLayout {
+                Layout.fillWidth: true; spacing: 3
+                Rectangle {
+                    visible: !page.compact
+                    implicitWidth: connectionLabel.implicitWidth + 16; implicitHeight: 22
+                    radius: 11
+                    color: page.current ? Theme.positiveSoft : page.blocked ? Theme.amberSoft : Theme.hover
+                    Row {
+                        id: connectionLabel
+                        anchors.centerIn: parent
+                        spacing: 5
+                        Rectangle {
+                            width: 5; height: 5; radius: 3
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: connectionStatus.color
+                        }
+                        Type {
+                            id: connectionStatus
+                            text: page.current ? (page.wireless ? "Connected over Wi-Fi" : "Connected over USB")
+                                               : page.blocked ? "Authorization required" : "Waiting for device"
+                            font.pixelSize: 11; font.weight: Font.DemiBold
+                            color: page.current ? Theme.positive : page.blocked ? Theme.amber : Theme.muted
+                        }
+                    }
+                }
+                Type {
+                    Layout.fillWidth: true; font.pixelSize: page.compact ? 20 : 25
+                    font.weight: Font.DemiBold; font.letterSpacing: -0.45
+                    wrapMode: Text.NoWrap; elide: Text.ElideRight
+                    text: page.current ? page.current.display_name.split(" · ")[0] : page.blocked ? "Authorize your device" : "Connect your device"
+                }
+                Type {
+                    Layout.fillWidth: true; quiet: true
+                    wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
+                    text: page.current ? page.current.serial + (page.compact ? (page.wireless ? " · Wi-Fi" : " · USB") : "")
+                                       : page.blocked ? page.blocked.serial + " · " + page.blocked.state + ". Unlock your phone and allow USB debugging."
+                                       : "Enable USB debugging and plug in your phone, or pair over Wi-Fi."
+                }
             }
-            Type { Layout.fillWidth: true; text: page.current ? page.current.display_name.split(" · ")[0] : page.blocked ? "Authorize your device" : "Connect your device"; font.pixelSize: 29; font.bold: true }
-            Type {
-                Layout.fillWidth: true; color: "#c2d4c8"
-                text: page.current ? page.current.serial : page.blocked ? page.blocked.serial + " · " + page.blocked.state + ". Unlock your phone and check USB debugging." : "Plug in your phone and allow USB debugging, or pair over Wi-Fi below."
-            }
             RowLayout {
-                Layout.topMargin: 5
-                DeckButton { objectName: "scanButton"; text: "Scan devices"; glyph: "\ue72c"; primary: true; enabled: !deck.state.busy; onClicked: deck.scan() }
-                DeckButton { visible: !page.current; text: "Setup guide"; onClicked: page.window.page = 5 }
+                DeckButton { objectName: "scanButton"; text: "Scan devices"; glyph: "refresh"; compact: page.compact; primary: !page.current; enabled: !deck.state.busy; onClicked: deck.scan() }
+                DeckButton { visible: !page.current; text: "Setup guide"; compact: page.compact; onClicked: page.window.page = 5 }
                 Choice {
+                    id: deviceChoice
+                    objectName: "deviceChoice"
+                    menuLabel: "Active device"
+                    menuRowHeight: 52
                     enabled: !deck.state.busy
-                    visible: page.ready.length > 1; Layout.preferredWidth: Math.min(250, hero.width - 148)
+                    visible: page.ready.length > 1
+                    Layout.preferredWidth: Math.min(250, page.compact ? hero.width * 0.31 : hero.width - 148)
+                    Layout.preferredHeight: page.compact ? 33 : implicitHeight
                     model: page.ready; textRole: "display_name"; valueRole: "serial"
                     currentIndex: page.ready.findIndex(d => d.serial === deck.state.serial)
                     displayText: page.current ? page.current.display_name + " · " + page.current.serial : ""
-                    delegate: ItemDelegate { required property var modelData; width: parent ? parent.width : 200; text: modelData.display_name + " · " + modelData.serial }
+                    popup.width: Math.max(width, Math.min(360, page.width - 30))
+                    popup.x: width - popup.width
+                    delegate: DropdownItem {
+                        required property int index; required property var modelData
+                        objectName: "deviceChoiceOption" + index
+                        width: deviceChoice.popup.availableWidth
+                        label: modelData.display_name
+                        detail: modelData.serial
+                        selected: deviceChoice.currentIndex === index
+                        highlighted: deviceChoice.highlightedIndex === index
+                    }
                     Accessible.name: "Active device"; onActivated: index => deck.select(page.ready[index].serial)
                 }
             }
         }
     }
-    GridLayout {
-        Layout.fillWidth: true; columns: page.wide ? 2 : 1; rowSpacing: 14; columnSpacing: 14
+    RowLayout {
+        Layout.fillWidth: true; spacing: page.contentSpacing
         Card {
             enabled: !deck.state.busy
-            Layout.alignment: Qt.AlignTop; Layout.preferredWidth: 480
-            title: "Wireless connection"; glyph: "\ue701"
+            Layout.fillHeight: true; Layout.preferredWidth: 480
+            inset: page.cardInset; spacing: page.cardSpacing
+            title: "Wireless connection"; glyph: "wifi"
             RowLayout {
                 Layout.fillWidth: true
                 Repeater {
                     model: ["USB assisted", "Pair with code"]
                     DeckButton {
                         required property int index; required property string modelData
-                        Layout.fillWidth: true; text: modelData; primary: page.window.direct === (index === 1)
+                        Layout.fillWidth: true; text: modelData; selected: page.window.direct === (index === 1)
+                        compact: page.compact
                         onClicked: page.window.direct = index === 1
                     }
                 }
             }
-            Type { Layout.fillWidth: true; quiet: true; text: page.window.direct ? "On Android 11+, open Wireless debugging and choose Pair device with pairing code." : "Use a USB connection to enable Wi-Fi mirroring on port 5555." }
-            Type { text: "Device IP address"; font.bold: true; font.pixelSize: 13 }
+            Type {
+                Layout.fillWidth: true; quiet: true
+                text: page.window.direct ? "Wireless debugging → Pair device with pairing code."
+                    : page.current && !page.wireless && deck.state.tcpSerial === deck.state.serial ? "Connect over Wi-Fi, then unplug the USB cable."
+                    : "Use a USB connection to enable Wi-Fi mirroring on port 5555."
+            }
             RowLayout {
                 Layout.fillWidth: true
-                Field { Layout.fillWidth: true; text: deck.settings.ip; placeholderText: "192.168.1.15"; Accessible.name: "Device IP address"; onTextEdited: deck.configure("ip", text) }
-                DeckButton { visible: !page.window.direct; text: "Get IP"; enabled: !!page.current && !deck.state.busy; onClicked: deck.getIp() }
+                Type { text: "Device IP address"; font.bold: true; font.pixelSize: 13 }
+                Field { Layout.fillWidth: true; Layout.minimumWidth: 110; Layout.preferredHeight: page.compact ? 33 : implicitHeight; text: deck.settings.ip; placeholderText: "192.168.1.15"; Accessible.name: "Device IP address"; onTextEdited: deck.configure("ip", text) }
+                DeckButton { visible: !page.window.direct; text: "Get IP"; compact: page.compact; enabled: !!page.current && !deck.state.busy; onClicked: deck.getIp() }
             }
             RowLayout {
                 visible: !page.window.direct; Layout.fillWidth: true
-                DeckButton { text: "Enable TCP/IP"; enabled: !!page.current && !deck.state.busy; onClicked: deck.enableTcp() }
-                DeckButton { text: "Connect Wi-Fi"; enabled: !deck.state.busy; onClicked: deck.connectWifi("5555", true) }
+                DeckButton { text: "Enable TCP/IP"; compact: page.compact; enabled: !!page.current && !deck.state.busy; onClicked: deck.enableTcp() }
+                DeckButton { text: "Connect Wi-Fi"; compact: page.compact; enabled: !deck.state.busy; onClicked: deck.connectWifi("5555", true) }
             }
             GridLayout {
-                visible: page.window.direct; Layout.fillWidth: true; columns: 3
+                visible: page.window.direct; Layout.fillWidth: true; columns: 3; rowSpacing: 3
                 Type { text: "Pair port"; font.pixelSize: 13 }
                 Type { text: "Pairing code"; Layout.columnSpan: 2; font.pixelSize: 13 }
-                Field { Layout.fillWidth: true; Layout.preferredWidth: 80; placeholderText: "37283"; Accessible.name: "Pair port"; text: page.window.pairPort; onTextEdited: page.window.pairPort = text }
-                Field { Layout.fillWidth: true; Layout.preferredWidth: 100; placeholderText: "6 digits"; Accessible.name: "Pairing code"; maximumLength: 6; echoMode: TextInput.Password; text: page.window.pairCode; onTextEdited: page.window.pairCode = text }
-                DeckButton { text: "Pair"; enabled: !deck.state.busy; onClicked: deck.pair(page.window.pairPort, page.window.pairCode) }
-                Type { text: "Connection port"; Layout.columnSpan: 3; font.pixelSize: 13 }
-                Field { Layout.fillWidth: true; placeholderText: "42911"; Accessible.name: "Connection port"; text: deck.state.port; onTextEdited: deck.setPort(text) }
-                DeckButton { text: "Detect"; enabled: !deck.state.busy; onClicked: deck.detectPort() }
-                DeckButton { text: "Connect"; enabled: !deck.state.busy; onClicked: deck.connectWifi(deck.state.port) }
+                Field { Layout.fillWidth: true; Layout.preferredWidth: 80; Layout.preferredHeight: page.compact ? 33 : implicitHeight; placeholderText: "37283"; Accessible.name: "Pair port"; text: page.window.pairPort; onTextEdited: page.window.pairPort = text }
+                Field { Layout.fillWidth: true; Layout.preferredWidth: 100; Layout.preferredHeight: page.compact ? 33 : implicitHeight; placeholderText: "6 digits"; Accessible.name: "Pairing code"; maximumLength: 6; echoMode: TextInput.Password; text: page.window.pairCode; onTextEdited: page.window.pairCode = text }
+                DeckButton { text: "Pair"; compact: page.compact; enabled: !deck.state.busy; onClicked: deck.pair(page.window.pairPort, page.window.pairCode) }
+            }
+            RowLayout {
+                visible: page.window.direct; Layout.fillWidth: true
+                Type { text: "Connection port"; font.pixelSize: 13 }
+                Field { Layout.fillWidth: true; Layout.minimumWidth: 62; Layout.preferredHeight: page.compact ? 33 : implicitHeight; placeholderText: "42911"; Accessible.name: "Connection port"; text: deck.state.port; onTextEdited: deck.setPort(text) }
+                DeckButton { text: "Detect"; compact: page.compact; enabled: !deck.state.busy; onClicked: deck.detectPort() }
+                DeckButton { text: "Connect"; compact: page.compact; enabled: !deck.state.busy; onClicked: deck.connectWifi(deck.state.port) }
             }
         }
         Card {
-            title: "Session preview"; glyph: "\ue7f4"; Layout.preferredWidth: 308; Layout.alignment: Qt.AlignTop
+            title: "Session preview"; glyph: "monitor"; Layout.preferredWidth: 308; Layout.fillHeight: true
+            inset: page.cardInset; spacing: page.cardSpacing
             Repeater {
                 model: [
                     ["Source", Theme.sourceName(deck.settings.source) + (deck.settings.source === "screen" && deck.settings.screen_mode === "OTG" ? " · OTG" : "")],
@@ -110,43 +175,11 @@ Sheet {
                 ]
                 RowLayout {
                     required property var modelData; Layout.fillWidth: true
-                    Type { Layout.fillWidth: true; text: modelData[0]; quiet: true; font.pixelSize: 13 }
-                    Type { text: modelData[1]; font.pixelSize: 13; font.bold: true }
+                    Type { Layout.fillWidth: true; Layout.preferredWidth: 1; text: modelData[0]; quiet: true; font.pixelSize: 13; wrapMode: Text.NoWrap }
+                    Type { Layout.fillWidth: true; Layout.preferredWidth: 1; text: modelData[1]; font.pixelSize: 13; font.bold: true; wrapMode: Text.NoWrap; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight }
                 }
             }
-            DeckButton { text: "Quick settings"; glyph: "\ue9e9"; compact: true; onClicked: page.window.openQuick() }
-        }
-    }
-    Card {
-        title: "Next step"; glyph: "\ue946"
-        visible: !!page.current || !!deck.state.error
-        Type {
-            Layout.fillWidth: true; quiet: true
-            text: deck.state.error ? deck.state.error : page.wireless ? "Your wireless link is ready. Start a session when you’re ready to mirror."
-                : !page.current ? "Enable Developer options and USB debugging, connect a data cable and scan for devices."
-                : !deck.settings.ip ? "Mirror over USB now, or read the phone’s Wi-Fi address to continue wirelessly."
-                : deck.state.tcpSerial !== deck.state.serial ? "Enable TCP/IP for the selected device to continue over Wi-Fi." : "Connect to the phone over Wi-Fi, then unplug the cable."
-        }
-        RowLayout {
-            DeckButton {
-                text: deck.state.error ? "Open console" : page.wireless || (page.current && !deck.settings.ip) ? "Start mirroring" : !page.current ? "Scan devices" : deck.state.tcpSerial === deck.state.serial ? "Connect Wi-Fi" : "Enable TCP/IP"
-                enabled: !deck.state.busy
-                onClicked: {
-                    if (deck.state.error) page.window.page = 4
-                    else if (!page.current) deck.scan()
-                    else if (page.wireless || !deck.settings.ip) deck.launch()
-                    else if (deck.state.tcpSerial === deck.state.serial) deck.connectWifi("5555", true)
-                    else deck.enableTcp()
-                }
-            }
-            DeckButton { visible: !!page.current && !page.wireless && !deck.settings.ip; text: "Get Wi-Fi address"; enabled: !deck.state.busy; onClicked: deck.getIp() }
-        }
-    }
-    Card {
-        title: "ADB utilities"; glyph: "\ue90f"
-        RowLayout {
-            DeckButton { text: "Stop ADB server"; enabled: !deck.state.busy; onClicked: page.window.askMaintenance("stop") }
-            DeckButton { text: "Reset connections"; enabled: !deck.state.busy; onClicked: page.window.askMaintenance("reset") }
+            DeckButton { text: "Quick settings"; glyph: "sliders"; compact: true; onClicked: page.window.openQuick() }
         }
     }
 }

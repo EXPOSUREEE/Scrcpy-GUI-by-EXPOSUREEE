@@ -4,12 +4,15 @@ TextField {
     id: control
     implicitHeight: 38
     leftPadding: 12
+    font.family: Theme.sans
+    font.pixelSize: 13
     color: Theme.text
-    placeholderTextColor: "#8a9e97"
+    placeholderTextColor: Theme.muted
     selectByMouse: true
-    selectionColor: "#3f755d"
+    selectionColor: Theme.accentFill
+    selectedTextColor: Theme.accentText
     background: Rectangle {
-        radius: 7; color: Theme.input
-        border.color: control.activeFocus ? Theme.mint : Theme.line
+        radius: 9; color: Theme.input
+        border.color: control.activeFocus ? Theme.accent : Theme.controlLine
     }
 }

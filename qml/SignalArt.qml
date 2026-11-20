@@ -1,54 +1,51 @@
-// Static connection illustration. Only size changes invalidate the texture.
 import QtQuick
-Canvas {
+
+Rectangle {
     id: art
+    property bool connected: false
+    property bool wireless: false
+    readonly property color signalColor: connected ? Theme.positive : Theme.accent
+    radius: 12
+    color: connected ? Theme.positiveSoft : Theme.accentSoft
     Accessible.ignored: true
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
-    onPaint: {
-        const c = getContext("2d")
-        c.reset()
-        c.scale(width / 300, height / 178)
-        c.strokeStyle = "#33554d"
-        c.lineWidth = 0.7
-        for (let i = 0; i < 6; ++i) {
-            c.beginPath()
-            c.ellipse(20-i*13, 40-i*13, 218+i*26, 110+i*26)
-            c.stroke()
+
+    Item {
+        width: 212
+        height: 102
+        anchors.centerIn: parent
+        scale: Math.min(1, (art.width - 22) / width)
+
+        Rectangle {
+            x: 4; y: 15; width: 43; height: 72; radius: 11
+            color: Theme.panel
+            border.color: art.signalColor
+            Rectangle { x: 8; y: 11; width: 27; height: 43; radius: 5; color: art.color }
+            Rectangle { x: 16; y: 61; width: 11; height: 2; radius: 1; color: art.signalColor }
         }
-        for (let x = 8; x < 298; x += 13)
-            for (let y = 6; y < 178; y += 13) {
-                c.fillStyle = "#47655c"; c.fillRect(x, y, 1, 1)
+        Repeater {
+            model: 8
+            Rectangle {
+                required property int index
+                x: 47 + index * 8; y: 50
+                width: 4; height: 2; radius: 1
+                color: art.signalColor
+                opacity: art.connected ? 0.85 : 0.4
             }
-        function phone(x, y, angle, rear) {
-            c.save(); c.translate(x,y); c.rotate(angle)
-            let g = c.createLinearGradient(0,0,80,139)
-            g.addColorStop(0, rear ? "#44675e" : "#53786e")
-            g.addColorStop(1, "#172b2a")
-            c.fillStyle=g; c.strokeStyle=rear ? "#759d8e" : "#c1e2d0"; c.lineWidth=1.5
-            c.beginPath(); c.roundedRect(0,0,75,137,11,11); c.fill(); c.stroke()
-            c.save()
-            c.beginPath(); c.roundedRect(4,4,67,129,8,8); c.clip()
-            let screen = c.createLinearGradient(4,4,65,133)
-            screen.addColorStop(0,rear ? "#314c48" : "#28443f")
-            screen.addColorStop(0.6,rear ? "#24433b" : "#3f7a60")
-            screen.addColorStop(1,"#152b29")
-            c.fillStyle=screen; c.fillRect(4,4,67,129)
-            for (let i=0;i<21;i++) {
-                c.strokeStyle=rear ? "#537967" : (i%5===0 ? "#b3e9b7" : "#83b998")
-                c.lineWidth=0.66; c.beginPath(); c.moveTo(-7,35+i*3.2)
-                c.bezierCurveTo(16,45+i*3.1,25,118-i*1.6,86,66+i*3.7); c.stroke()
-            }
-            c.restore()
-            c.fillStyle="#132721"; c.beginPath(); c.roundedRect(24,5,27,4,2,2); c.fill()
-            c.fillStyle="#c0ddc7"; c.fillRect(28,129,20,1.5)
-            c.restore()
         }
-        phone(88,27,-0.20,true)
-        phone(163,18,0.18,false)
-        c.fillStyle="#c0efb8"
-        for (let p of [[54,109],[260,66],[233,153]]) {
-            c.beginPath(); c.arc(p[0],p[1],2,0,2*Math.PI); c.fill()
+        Rectangle {
+            x: 62; y: 36; width: 30; height: 30; radius: 15
+            color: Theme.panel
+            border.color: art.signalColor
+            Glyph { anchors.centerIn: parent; name: art.wireless ? "wifi" : "link"; size: 15; color: art.signalColor }
+        }
+        Rectangle {
+            x: 105; y: 19; width: 103; height: 63; radius: 9
+            color: Theme.panel
+            border.color: art.signalColor
+            Rectangle { x: 8; y: 8; width: 87; height: 47; radius: 4; color: art.color }
+            Glyph { anchors.centerIn: parent; name: art.connected ? "play" : "phone"; size: 21; color: art.signalColor }
+            Rectangle { x: 50; y: 63; width: 2; height: 8; color: art.signalColor }
+            Rectangle { x: 39; y: 71; width: 24; height: 2; radius: 1; color: art.signalColor }
         }
     }
 }

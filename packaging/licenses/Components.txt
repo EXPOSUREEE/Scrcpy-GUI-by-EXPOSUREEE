@@ -17,6 +17,6 @@ https://github.com/libsdl-org/SDL
 https://ffmpeg.org/
 https://github.com/libusb/libusb
 
-Nunito and Cascadia Code font notices are in Nunito.txt and CascadiaCode.txt.
+Inter and Cascadia Code font notices are in Inter.txt and CascadiaCode.txt.
 The optional Universal ADB Driver installer is published by ClockworkMod.
 https://github.com/koush/UniversalAdbDriver

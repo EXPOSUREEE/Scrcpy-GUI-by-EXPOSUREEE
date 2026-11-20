@@ -3,28 +3,42 @@ import QtQuick.Controls
 Button {
     id: control
     property bool primary: false
+    property bool selected: false
     property string glyph: ""
     property bool compact: false
-    implicitHeight: compact ? 33 : 39
-    implicitWidth: Math.max(40, contentItem.implicitWidth + leftPadding + rightPadding)
-    leftPadding: compact ? 11 : 15
+    implicitHeight: compact ? 33 : 38
+    implicitWidth: text ? contentItem.implicitWidth + leftPadding + rightPadding : implicitHeight
+    leftPadding: text ? (compact ? 11 : 15) : 0
     rightPadding: leftPadding
     hoverEnabled: true
-    opacity: enabled ? 1 : 0.45
+    Accessible.selected: selected
     contentItem: Item {
         implicitWidth: labels.implicitWidth
         Row {
             id: labels; anchors.centerIn: parent
-            spacing: control.glyph && control.text ? 9 : 0
-            Glyph { visible: !!control.glyph; text: control.glyph; height: 22; color: control.primary ? "#102820" : Theme.mint; font.pixelSize: 15 }
-            Type { text: control.text; height: 22; font.bold: true; font.pixelSize: 13; color: control.primary ? "#102820" : Theme.text }
+            spacing: control.glyph && control.text ? 7 : 0
+            Glyph {
+                visible: !!control.glyph
+                name: control.glyph; size: 16; anchors.verticalCenter: parent.verticalCenter
+                color: !control.enabled ? Theme.muted : control.primary ? Theme.accentText
+                                       : control.selected ? Theme.accent : Theme.muted
+            }
+            Type {
+                visible: !!control.text
+                text: control.text; height: 22; font.weight: Font.DemiBold; font.pixelSize: 12
+                color: !control.enabled ? Theme.muted : control.primary ? Theme.accentText
+                                       : control.selected ? Theme.accent : Theme.text
+            }
         }
     }
     background: Rectangle {
-        radius: 8
-        color: control.primary ? (control.down ? "#7ed6a6" : control.hovered ? "#c5f7d8" : Theme.mint)
-                               : control.down ? "#2d3d3c" : control.hovered ? "#344540" : "#263332"
-        border.color: control.visualFocus ? "white" : control.primary ? color : "#455550"
-        Behavior on color { ColorAnimation { duration: 110 } }
+        radius: height / 2
+        color: !control.enabled ? Theme.hover
+                               : control.primary ? (control.down ? Theme.accentPressed : control.hovered ? Theme.accentHover : Theme.accentFill)
+                               : control.selected ? Theme.accentSoft
+                               : control.down ? Theme.pressed : control.hovered ? Theme.hover : Theme.panel
+        border.color: !control.enabled ? Theme.line : control.visualFocus ? Theme.accent
+                                      : control.primary || control.selected ? color : Theme.controlLine
+        border.width: control.visualFocus ? 2 : 1
     }
 }

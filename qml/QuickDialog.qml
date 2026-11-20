@@ -16,7 +16,7 @@ DeckDialog {
                 model: ["Screen", "Camera", "Mic"]
                 DeckButton {
                     required property int index; required property string modelData
-                    Layout.fillWidth: true; text: modelData; primary: dialog.mode === index
+                    Layout.fillWidth: true; text: modelData; selected: dialog.mode === index
                     onClicked: dialog.mode = index
                 }
             }

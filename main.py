@@ -3,13 +3,16 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QLockFile, QStandardPaths, QTimer, QUrl
+from PySide6.QtCore import QLockFile, QStandardPaths, Qt, QTimer, QUrl
 from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from assets import RESOURCES, VERSION
 from controller import Deck
+
+if sys.platform == "win32":
+    from window_caption import install_windows_caption
 
 
 def create_engine(deck):
@@ -22,6 +25,10 @@ def create_engine(deck):
     engine.rootContext().setContextProperty("deck", deck)
     engine.rootContext().setContextProperty("consoleLog", deck.logs)
     engine.load(QUrl.fromLocalFile(str(RESOURCES / "qml/Main.qml")))
+    if sys.platform == "win32" and engine.rootObjects():
+        window = engine.rootObjects()[0]
+        if window.property("captionHeight"):
+            install_windows_caption(window)
     return engine
 
 
@@ -31,9 +38,9 @@ def run_app():
     app.setApplicationName("Scrcpy Deck")
     app.setApplicationVersion(VERSION)
     app.setWindowIcon(QIcon(str(RESOURCES / "assets/icon.ico")))
-    for name in ("Nunito-Regular", "Nunito-Bold", "CascadiaCode-Regular"):
+    for name in ("Inter-Regular", "Inter-SemiBold", "Inter-Bold", "CascadiaCode-Regular"):
         QFontDatabase.addApplicationFont(str(RESOURCES / f"fonts/{name}.ttf"))
-    app.setFont(QFont("Nunito", 10))
+    app.setFont(QFont("Inter", 10))
     profile = Path(os.environ.get("SCRCPY_DECK_PROFILE_DIR") or
                    QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
     profile.mkdir(parents=True, exist_ok=True)
@@ -45,6 +52,13 @@ def run_app():
                                               "Scrcpy Deck", 0x40)
         return 1
     deck = Deck(profile / "config.json")
+
+    def update_color_scheme():
+        scheme = Qt.ColorScheme.Dark if deck.settings["appearance"] == "dark" else Qt.ColorScheme.Light
+        app.styleHints().setColorScheme(scheme)
+
+    update_color_scheme()
+    deck.settingsChanged.connect(update_color_scheme)
     engine = create_engine(deck)
     if not engine.rootObjects():
         deck.logs.flush()

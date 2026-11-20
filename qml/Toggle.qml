@@ -15,12 +15,13 @@ Switch {
     indicator: Rectangle {
         x: control.width - width; anchors.verticalCenter: parent.verticalCenter
         implicitWidth: 37; implicitHeight: 21; radius: height / 2
-        color: control.checked ? Theme.mint : "#40504f"
-        border.color: control.visualFocus ? "white" : color
+        color: control.checked ? Theme.accentFill : Theme.hover
+        border.color: control.visualFocus ? Theme.accent : control.checked ? color : Theme.controlLine
+        border.width: control.visualFocus ? 2 : 1
         Rectangle {
             width: 15; height: 15; radius: 8; y: 3
             x: control.checked ? parent.width - width - 3 : 3
-            color: control.checked ? "#183328" : "#ced9d3"
+            color: control.checked ? Theme.accentText : Theme.muted
             Behavior on x { NumberAnimation { duration: 125 } }
         }
     }

@@ -13,6 +13,7 @@ DEFAULTS = {
     "fullscreen": False, "borderless": False, "no_control": False, "record": False,
     "debug_mode": False, "screen_mode": "HID", "camera_id": "Default",
     "camera_torch": False, "camera_zoom": "1.0", "camera_max_size": "0", "camera_fps": "30",
+    "appearance": "light",
 }
 
 
@@ -24,6 +25,8 @@ def normalize(key, value):
         return DEFAULTS[key]
     if key == "screen_mode":
         return next((mode for mode in ("OTG", "UHID") if str(value).upper().startswith(mode)), "HID")
+    if key == "appearance":
+        return value if value in ("light", "dark") else DEFAULTS[key]
     return str(value)
 
 
