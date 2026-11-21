@@ -1,10 +1,12 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+
 Sheet {
     id: page
     property string section: "USB debugging"
     property string brand: "Samsung"
+
     Flow {
         Layout.fillWidth: true; spacing: 6
         Repeater {
@@ -15,18 +17,20 @@ Sheet {
                 selected: page.section === text
                 onClicked: {
                     page.section = text
-                    if (text === "Updates" && !deck.state.scrcpyStatus) {
-                        deck.checkScrcpyUpdate()
+                    if (text === "Updates" && (!deck.state.deckReleases || deck.state.deckReleases.length === 0)) {
+                        deck.checkAllUpdates(false)
                     }
                 }
             }
         }
     }
+
+    /* ── SECTION A: SCRCPY DECK APPLICATION ── */
     Card {
         visible: page.section === "Updates"; title: "Scrcpy Deck updates"; glyph: "deck"
         Type {
             Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: "Keep the Scrcpy Deck desktop application updated with the latest features, improvements, and bug fixes."
+            text: "Manage Scrcpy Deck application versions. Upgrade to newer releases, downgrade to previous releases, or reinstall your current version."
             quiet: true
         }
         RowLayout {
@@ -39,7 +43,7 @@ Sheet {
             Rectangle { implicitWidth: 1; implicitHeight: 32; color: Theme.line }
             ColumnLayout {
                 spacing: 2
-                Type { text: "Latest release"; font.pixelSize: 12; quiet: true }
+                Type { text: "Latest stable"; font.pixelSize: 12; quiet: true }
                 Type {
                     text: deck.state.update ? ("v" + deck.state.update + " (Update available)")
                         : (deck.state.updateStatus === "checking" ? "Checking…" : ("v" + deck.version + " (Latest)"))
@@ -48,6 +52,38 @@ Sheet {
                 }
             }
         }
+
+        ColumnLayout {
+            Layout.fillWidth: true; spacing: 4
+            Type { text: "Select application version"; font.pixelSize: 12; quiet: true }
+            Choice {
+                objectName: "deckReleaseChoice"
+                Layout.fillWidth: true
+                model: deck.state.deckReleaseLabels
+                currentIndex: deck.state.selectedDeckIndex || 0
+                onActivated: index => deck.selectDeckRelease(index)
+            }
+        }
+
+        ColumnLayout {
+            visible: !!deck.state.selectedDeckInfo && !!deck.state.selectedDeckInfo.version
+            Layout.fillWidth: true; spacing: 4
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                Type { text: "Selected: v" + (deck.state.selectedDeckInfo.version || ""); font.weight: Font.DemiBold }
+                Type { text: "•"; quiet: true; visible: !!deck.state.selectedDeckInfo.date }
+                Type { text: "Release date: " + (deck.state.selectedDeckInfo.date || "Unknown"); quiet: true; visible: !!deck.state.selectedDeckInfo.date }
+                Type { text: "•"; quiet: true; visible: !!deck.state.selectedDeckInfo.size_str }
+                Type { text: "Size: " + (deck.state.selectedDeckInfo.size_str || ""); quiet: true; visible: !!deck.state.selectedDeckInfo.size_str }
+                Type { text: "•"; quiet: true; visible: !!deck.state.selectedDeckInfo.action }
+                Type {
+                    text: "Action: " + (deck.state.selectedDeckInfo.action === "upgrade" ? "Upgrade" : deck.state.selectedDeckInfo.action === "downgrade" ? "Downgrade" : deck.state.selectedDeckInfo.action === "reinstall" ? "Reinstall" : "Install")
+                    color: deck.state.selectedDeckInfo.action === "downgrade" ? Theme.amber : Theme.accent
+                    font.weight: Font.Medium
+                }
+            }
+        }
+
         Rectangle {
             visible: deck.state.updateStatus === "downloading"
             Layout.fillWidth: true; implicitHeight: 8; radius: 4; color: Theme.input
@@ -76,18 +112,31 @@ Sheet {
             Layout.fillWidth: true; color: Theme.positive
             text: "✓ Scrcpy Deck is up to date."
         }
+
         Flow {
             Layout.fillWidth: true; spacing: 8
             DeckButton {
-                text: "Check for updates"; glyph: "refresh"
+                primary: true
+                text: deck.state.deckActionText || "Install"
+                glyph: "download"
                 enabled: deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing"
-                onClicked: deck.checkForUpdates()
+                onClicked: {
+                    if (deck.state.selectedDeckInfo && deck.state.selectedDeckInfo.action === "downgrade") {
+                        downgradeDialog.open()
+                    } else {
+                        deck.installSelectedDeck()
+                    }
+                }
             }
             DeckButton {
-                visible: !!deck.state.update
-                primary: true; text: "Install update v" + deck.state.update; glyph: "download"
+                text: "View release notes"; glyph: "globe"
+                visible: !!deck.state.selectedDeckInfo && !!deck.state.selectedDeckInfo.html_url
+                onClicked: Qt.openUrlExternally(deck.state.selectedDeckInfo.html_url)
+            }
+            DeckButton {
+                text: "Check for updates"; glyph: "refresh"
                 enabled: deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing"
-                onClicked: deck.installUpdate()
+                onClicked: deck.checkAllUpdates(true)
             }
             DeckButton {
                 visible: deck.state.updateStatus === "downloading"
@@ -96,28 +145,41 @@ Sheet {
             }
             DeckButton {
                 text: "Releases on GitHub"; glyph: "globe"
-                onClicked: Qt.openUrlExternally("https://github.com/EXPOSUREEE/ScrcpyDeck-Desktop/releases")
+                onClicked: Qt.openUrlExternally("https://github.com/Yavagu/Scrcpy-GUI-by-EXPOSUREEE/releases")
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true; spacing: 12
+            Type { text: "Update preference:"; font.pixelSize: 12; quiet: true }
+            Choice {
+                Layout.preferredWidth: 200
+                model: ["Follow latest stable", "Keep selected version"]
+                currentIndex: deck.state.deckPinningPreference === "pinned" ? 1 : 0
+                onActivated: index => deck.setDeckPinning(index === 1 ? "pinned" : "follow_latest")
             }
         }
     }
+
+    /* ── SECTION B: SCRCPY CORE ENGINE ── */
     Card {
         visible: page.section === "Updates"; title: "Scrcpy core engine updates"; glyph: "tools"
         Type {
             Layout.fillWidth: true; wrapMode: Text.Wrap
-            text: "Scrcpy is the open-source screen and camera mirroring engine by Genymobile. Check for and install the latest scrcpy binary distribution directly into your local runtime."
+            text: "Scrcpy is the screen and camera mirroring engine by Genymobile. Manage engine versions, switch between local runtimes, or download newer versions directly into your runtime."
             quiet: true
         }
         RowLayout {
             Layout.fillWidth: true; spacing: 16
             ColumnLayout {
                 spacing: 2
-                Type { text: "Installed runtime"; font.pixelSize: 12; quiet: true }
-                Type { text: deck.state.scrcpyVersion ? ("v" + deck.state.scrcpyVersion) : ("v" + deck.scrcpy_version); font.weight: Font.DemiBold; font.pixelSize: 15 }
+                Type { text: "Active runtime"; font.pixelSize: 12; quiet: true }
+                Type { text: "v" + (deck.state.scrcpyVersion || deck.scrcpy_version); font.weight: Font.DemiBold; font.pixelSize: 15 }
             }
             Rectangle { implicitWidth: 1; implicitHeight: 32; color: Theme.line }
             ColumnLayout {
                 spacing: 2
-                Type { text: "Latest on GitHub"; font.pixelSize: 12; quiet: true }
+                Type { text: "Latest stable"; font.pixelSize: 12; quiet: true }
                 Type {
                     text: deck.state.scrcpyLatest ? ("v" + deck.state.scrcpyLatest + (deck.state.scrcpyStatus === "available" ? " (Update available)" : " (Up to date)"))
                         : (deck.state.scrcpyStatus === "checking" ? "Checking…" : "Not checked")
@@ -126,6 +188,70 @@ Sheet {
                 }
             }
         }
+
+        ColumnLayout {
+            Layout.fillWidth: true; spacing: 4
+            Type { text: "Select scrcpy version"; font.pixelSize: 12; quiet: true }
+            Choice {
+                objectName: "scrcpyReleaseChoice"
+                Layout.fillWidth: true
+                model: deck.state.scrcpyReleaseLabels
+                currentIndex: deck.state.selectedScrcpyIndex || 0
+                onActivated: index => deck.selectScrcpyRelease(index)
+            }
+        }
+
+        ColumnLayout {
+            visible: !!deck.state.selectedScrcpyInfo && !!deck.state.selectedScrcpyInfo.version
+            Layout.fillWidth: true; spacing: 4
+            RowLayout {
+                Layout.fillWidth: true; spacing: 8
+                Type { text: "Selected: v" + (deck.state.selectedScrcpyInfo.version || ""); font.weight: Font.DemiBold }
+                Type { text: "•"; quiet: true; visible: !!deck.state.selectedScrcpyInfo.date }
+                Type { text: "Release date: " + (deck.state.selectedScrcpyInfo.date || "Unknown"); quiet: true; visible: !!deck.state.selectedScrcpyInfo.date }
+                Type { text: "•"; quiet: true; visible: !!deck.state.selectedScrcpyInfo.size_str }
+                Type { text: "Size: " + (deck.state.selectedScrcpyInfo.size_str || ""); quiet: true; visible: !!deck.state.selectedScrcpyInfo.size_str }
+                Type { text: "•"; quiet: true }
+                Type {
+                    text: "Status: " + (deck.state.selectedScrcpyInfo.version === (deck.state.scrcpyVersion || deck.scrcpy_version) ? "Active runtime" : deck.state.selectedScrcpyInfo.is_installed ? "Available locally" : "Available for download")
+                    color: deck.state.selectedScrcpyInfo.version === (deck.state.scrcpyVersion || deck.scrcpy_version) ? Theme.positive : Theme.accent
+                    font.weight: Font.Medium
+                }
+            }
+        }
+
+        /* Compatibility Notice Box */
+        Rectangle {
+            visible: !!deck.state.scrcpyCompatibilitySummary && deck.state.scrcpyCompatibilitySummary.length > 0
+            Layout.fillWidth: true
+            implicitHeight: compatCol.implicitHeight + 16
+            radius: 10
+            color: Theme.amberSoft
+            border.color: Theme.amber
+            border.width: 1
+            ColumnLayout {
+                id: compatCol
+                anchors.fill: parent; anchors.margins: 10; spacing: 4
+                RowLayout {
+                    spacing: 6
+                    Glyph { name: "warning"; size: 16; color: Theme.amber }
+                    Type {
+                        text: "Compatibility notice for scrcpy v" + (deck.state.selectedScrcpyInfo.version || "") + ":"
+                        font.bold: true; color: Theme.amber
+                    }
+                }
+                Repeater {
+                    model: deck.state.scrcpyCompatibilitySummary
+                    Type {
+                        required property string modelData
+                        Layout.fillWidth: true; wrapMode: Text.Wrap
+                        text: "• " + modelData
+                        color: Theme.text; font.pixelSize: 12
+                    }
+                }
+            }
+        }
+
         Rectangle {
             visible: deck.state.scrcpyStatus === "downloading"
             Layout.fillWidth: true; implicitHeight: 8; radius: 4; color: Theme.input
@@ -159,18 +285,30 @@ Sheet {
             Layout.fillWidth: true; color: Theme.danger; wrapMode: Text.Wrap
             text: "Scrcpy update error: " + deck.state.scrcpyError
         }
+
         Flow {
             Layout.fillWidth: true; spacing: 8
             DeckButton {
-                text: "Check scrcpy update"; glyph: "refresh"
-                enabled: deck.state.scrcpyStatus !== "downloading" && deck.state.scrcpyStatus !== "installing"
-                onClicked: deck.checkScrcpyUpdate()
+                primary: true
+                text: deck.state.scrcpyActionText || "Install"
+                glyph: "download"
+                enabled: (deck.state.scrcpyActionText !== "Active runtime") && (deck.state.scrcpyStatus !== "downloading") && (deck.state.scrcpyStatus !== "installing")
+                onClicked: deck.installOrActivateSelectedScrcpy()
             }
             DeckButton {
-                visible: deck.state.scrcpyStatus === "available"
-                primary: true; text: "Install scrcpy v" + deck.state.scrcpyLatest; glyph: "download"
+                text: "View release notes"; glyph: "globe"
+                visible: !!deck.state.selectedScrcpyInfo && !!deck.state.selectedScrcpyInfo.html_url
+                onClicked: Qt.openUrlExternally(deck.state.selectedScrcpyInfo.html_url)
+            }
+            DeckButton {
+                text: "Clean up unused runtimes"; glyph: "trash"
                 enabled: deck.state.scrcpyStatus !== "downloading" && deck.state.scrcpyStatus !== "installing"
-                onClicked: deck.installScrcpyUpdate()
+                onClicked: deck.cleanUnusedRuntimes()
+            }
+            DeckButton {
+                text: "Check for updates"; glyph: "refresh"
+                enabled: deck.state.scrcpyStatus !== "downloading" && deck.state.scrcpyStatus !== "installing"
+                onClicked: deck.checkAllUpdates(true)
             }
             DeckButton {
                 visible: deck.state.scrcpyStatus === "downloading"
@@ -182,7 +320,41 @@ Sheet {
                 onClicked: Qt.openUrlExternally("https://github.com/Genymobile/scrcpy/releases")
             }
         }
+
+        RowLayout {
+            Layout.fillWidth: true; spacing: 12
+            Type { text: "Engine preference:"; font.pixelSize: 12; quiet: true }
+            Choice {
+                Layout.preferredWidth: 200
+                model: ["Follow latest stable", "Keep selected version"]
+                currentIndex: deck.state.scrcpyPinningPreference === "pinned" ? 1 : 0
+                onActivated: index => deck.setScrcpyPinning(index === 1 ? "pinned" : "follow_latest")
+            }
+        }
     }
+
+    /* Downgrade confirmation dialog */
+    DeckDialog {
+        id: downgradeDialog
+        title: "Confirm Application Downgrade"
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        ColumnLayout {
+            width: parent.width; spacing: 10
+            Type {
+                Layout.fillWidth: true; wrapMode: Text.Wrap
+                text: "You are about to downgrade Scrcpy Deck to an older version.\n\nOlder versions may not support all features or settings saved by newer versions. Your current settings have been safely backed up to your profile directory."
+            }
+            Type {
+                Layout.fillWidth: true; font.bold: true; color: Theme.accent
+                text: "Target version: v" + (deck.state.selectedDeckInfo ? deck.state.selectedDeckInfo.version : "")
+            }
+        }
+        onAccepted: {
+            deck.installSelectedDeck(true)
+        }
+    }
+
+    /* ── OTHER SECTIONS PRESERVED UNCHANGED ── */
     Card {
         visible: page.section === "USB debugging"; title: "Enable USB debugging"; glyph: "phone"
         Choice { objectName: "brandChoice"; Accessible.name: "Phone manufacturer"; menuLabel: "Phone manufacturer"; Layout.fillWidth: true; model: Object.keys(deck.guides.steps); currentIndex: model.indexOf(page.brand); onActivated: index => page.brand = model[index] }

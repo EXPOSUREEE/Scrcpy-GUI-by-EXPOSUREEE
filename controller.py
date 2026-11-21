@@ -1,5 +1,6 @@
 """Qt-facing state. Workers return values; only the GUI thread mutates the model."""
 from dataclasses import asdict
+from datetime import datetime
 import json
 import math
 import os
@@ -9,8 +10,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 import urllib.request
+import uuid
 
 from PySide6.QtCore import QObject, Property, QStandardPaths, QTimer, Signal, Slot, Qt
 from PySide6.QtGui import QGuiApplication
@@ -21,17 +23,65 @@ from config import DEFAULTS, SettingsStore, normalize
 from console import ConsoleModel, infer_fix_hint
 from library import address, endpoint, merge_devices
 from processes import ProcessRunner
+from release_catalog import (
+    DECK_REPO,
+    SCRCPY_REPO,
+    ReleaseEntry,
+    get_catalog,
+    parse_semver,
+)
+from runtime_capabilities import (
+    check_feature_support,
+    get_all_capabilities,
+    summarize_incompatibilities,
+)
+from runtime_manager import (
+    clean_unused_runtimes,
+    cleanup_staging,
+    get_active_pointer,
+    get_installed_runtime_path,
+    get_installed_runtimes,
+    is_valid_runtime_dir,
+    promote_staging_to_version,
+    prune_old_versions,
+    remove_active_pointer,
+    stage_and_validate_runtime,
+    write_active_pointer,
+)
 from scrcpy_command import build_scrcpy_command
 from updater import (
+    backup_user_settings,
     download_installer,
     extract_scrcpy_archive,
     find_latest_scrcpy_release,
     find_latest_update,
     get_installed_scrcpy_version,
     get_target_executable,
+    get_version_preferences,
     launch_installer_and_restart,
+    set_version_preference,
 )
 from workflows import Connections
+
+
+def format_date_str(date_str: str) -> str:
+    """Format ISO date string to human-readable 'DD Month YYYY'."""
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        return dt.strftime("%d %B %Y")
+    except Exception:
+        return str(date_str)[:10]
+
+
+def format_size_bytes(bytes_int: int) -> str:
+    """Format bytes into KB or MB string."""
+    if not bytes_int or bytes_int <= 0:
+        return ""
+    if bytes_int < 1024 * 1024:
+        return f"{bytes_int / 1024:.1f} KB"
+    return f"{bytes_int / (1024 * 1024):.1f} MB"
 
 
 class Deck(QObject):
@@ -40,6 +90,10 @@ class Deck(QObject):
     savedChanged = Signal()
     recoveryOffered = Signal(int)
     paired = Signal()
+    capabilitiesChanged = Signal()
+    versionManagerChanged = Signal()
+    notificationsChanged = Signal()
+    navigateToSection = Signal(str, str)
     _completed = Signal(object, object, str)
     _processExited = Signal(str, int)
     _updateFound = Signal(object)
@@ -50,6 +104,7 @@ class Deck(QObject):
     _scrcpyProgress = Signal(int)
     _scrcpyStatusChanged = Signal(str, str)
     _scrcpyPrepared = Signal(object)
+    _catalogLoaded = Signal(object)
 
     def __init__(self, profile=None, app_dir=APP_DIR):
         super().__init__()
@@ -60,7 +115,6 @@ class Deck(QObject):
 
         # Clean up any interrupted update staging directories on startup
         try:
-            from runtime_manager import cleanup_staging
             cleanup_staging()
         except Exception:
             pass
@@ -71,7 +125,6 @@ class Deck(QObject):
         # Resolve installed version from binary or committed active runtime pointer
         active_version = None
         try:
-            from runtime_manager import get_active_pointer
             pointer = get_active_pointer(get_writable_runtime())
             if pointer and pointer.get("version"):
                 active_version = str(pointer["version"])
@@ -83,6 +136,8 @@ class Deck(QObject):
             or active_version
             or "5.0.1"
         )
+        self._capabilities = get_all_capabilities(self.scrcpy_version, self.scrcpy)
+
         self.env = child_environment(self.adb.exe, self.scrcpy)
         self.stop = Event()
         self.wireless = Connections(self.adb, self.stop)
@@ -90,23 +145,69 @@ class Deck(QObject):
         self._update_info = None
         self._update_cancel = Event()
         self._update_op_id = 0
+        self._deck_op_id = 0
         self._scrcpy_info = None
         self._scrcpy_cancel = Event()
         self._scrcpy_op_id = 0
         self._pending_scrcpy_runtime = None
         self._activating_runtime = False
+        self._catalog_lock = Lock()
 
-        self._state = dict(status="Ready", error="", busy=False, devices=[], serial="",
-                           tcpSerial="", port="", lenses=["Default"], recovering=False,
-                           update="", updateStatus="", updateProgress=0, updateError="",
-                           updateSize=0, sessions=0,
-                           scrcpyVersion=self.scrcpy_version,
-                           scrcpyLatest="",
-                           scrcpyStatus="",
-                           scrcpyProgress=0,
-                           scrcpyError="")
+        self._version_prefs = get_version_preferences()
+        self._deck_releases = []
+        self._scrcpy_releases = []
+        self._selected_deck_release = None
+        self._selected_scrcpy_release = None
+
+        self._notifications = {
+            "deck": {
+                "visible": False,
+                "latest_version": "",
+                "current_version": VERSION,
+                "title": "",
+                "message": "",
+            },
+            "scrcpy": {
+                "visible": False,
+                "latest_version": "",
+                "current_version": self.scrcpy_version,
+                "title": "",
+                "message": "",
+            },
+        }
+
+        self._state = dict(
+            status="Ready", error="", busy=False, devices=[], serial="",
+            tcpSerial="", port="", lenses=["Default"], recovering=False,
+            update="", updateStatus="", updateProgress=0, updateError="",
+            updateSize=0, sessions=0,
+            scrcpyVersion=self.scrcpy_version,
+            scrcpyLatest="",
+            scrcpyStatus="",
+            scrcpyProgress=0,
+            scrcpyError="",
+            # Version manager state
+            deckReleases=[],
+            deckReleaseLabels=[],
+            deckReleaseVersions=[],
+            selectedDeckIndex=0,
+            selectedDeckInfo={},
+            deckActionText="Check for updates",
+            deckPinningPreference=self._version_prefs.get("deck_pinning", "follow_latest"),
+            scrcpyReleases=[],
+            scrcpyReleaseLabels=[],
+            scrcpyReleaseVersions=[],
+            selectedScrcpyIndex=0,
+            selectedScrcpyInfo={},
+            scrcpyActionText="Check for updates",
+            scrcpyPinningPreference=self._version_prefs.get("scrcpy_pinning", "follow_latest"),
+            scrcpyCompatibilitySummary=[],
+            installedScrcpyVersions=[Path(p).name for p in get_installed_runtimes()],
+        )
         self._guides = json.loads((RESOURCES / "data/guides.json").read_text(encoding="utf-8"))
         self.runner = ProcessRunner(self.env, self.logs.log, self._processExited.emit)
+
+        # Qt queued connections for thread safety
         self._completed.connect(self._finish, Qt.QueuedConnection)
         self._processExited.connect(self._exited, Qt.QueuedConnection)
         self._updateFound.connect(self._on_update_found, Qt.QueuedConnection)
@@ -117,6 +218,7 @@ class Deck(QObject):
         self._scrcpyProgress.connect(lambda p: self._change(scrcpyProgress=p), Qt.QueuedConnection)
         self._scrcpyStatusChanged.connect(self._on_scrcpy_status_changed, Qt.QueuedConnection)
         self._scrcpyPrepared.connect(self._on_scrcpy_prepared, Qt.QueuedConnection)
+        self._catalogLoaded.connect(self._on_catalog_loaded, Qt.QueuedConnection)
 
         self.timer = QTimer(self, interval=350, singleShot=True)
         self.timer.timeout.connect(self.save)
@@ -125,6 +227,8 @@ class Deck(QObject):
             self._error(self.store.error)
         elif self.store.dirty:
             self.timer.start()
+
+        self._refresh_version_manager_lists()
 
     @Property("QVariantMap", notify=stateChanged)
     def state(self):
@@ -145,6 +249,14 @@ class Deck(QObject):
     @Property(str, constant=True)
     def version(self):
         return VERSION
+
+    @Property("QVariantMap", notify=capabilitiesChanged)
+    def capabilities(self):
+        return self._capabilities
+
+    @Property("QVariantMap", notify=notificationsChanged)
+    def notifications(self):
+        return self._notifications
 
     def _change(self, **values):
         if any(self._state.get(k) != v for k, v in values.items()):
@@ -167,14 +279,12 @@ class Deck(QObject):
             self.store.values[key] = value
             self.store.dirty = True
             self.settingsChanged.emit()
-            self.timer.start()
 
     @Slot()
     def save(self):
-        try:
+        if self.store.dirty:
             self.store.save()
-        except OSError as exc:
-            self._error(f"Settings could not be saved. {exc}")
+            self.logs.log("INFO", "Settings saved.")
 
     def _library_changed(self):
         self.savedChanged.emit()
@@ -182,28 +292,28 @@ class Deck(QObject):
         self.timer.start()
 
     def _job(self, title, work, done, failed=None):
-        if self._state["busy"] or self._closed:
+        if self._state["busy"]:
             return
         self.stop.clear()
-        self._change(status=title, error="", busy=True)
+        self._change(busy=True, busyText=title, error="")
+
         def execute():
             try:
                 result = work()
+                error = None
             except Exception as exc:
-                if not self._closed:
-                    self._completed.emit(failed, None, str(exc) or type(exc).__name__)
-            else:
-                if not self._closed:
-                    self._completed.emit(done, result, "")
+                result = None
+                error = exc
+            self._completed.emit(done if error is None else failed, result, str(error) if error else "")
+
         Thread(target=execute, daemon=True).start()
 
     @Slot(object, object, str)
     def _finish(self, callback, result, error):
         if self._closed:
             return
-        cancelled = self.stop.is_set()
-        self._change(busy=False, recovering=False)
-        if cancelled:
+        self._change(busy=False, busyText="")
+        if self.stop.is_set():
             self._change(status="Cancelled")
         elif error:
             self._error(error)
@@ -424,7 +534,10 @@ class Deck(QObject):
                 zoom = float(s["camera_zoom"])
                 if not math.isfinite(zoom) or zoom <= 0:
                     raise ValueError("Camera zoom must be a positive number.")
-            cmd = build_scrcpy_command(dict(s, device_serial=serial, scrcpy_exe=self.scrcpy))
+            cmd = build_scrcpy_command(
+                dict(s, device_serial=serial, scrcpy_exe=self.scrcpy, scrcpy_version=self.scrcpy_version),
+                capabilities=self._capabilities,
+            )
             cwd = self.app_dir
             if "--record" in cmd:
                 cwd = Path(QStandardPaths.writableLocation(QStandardPaths.MoviesLocation)) / "Scrcpy Deck"
@@ -448,7 +561,7 @@ class Deck(QObject):
         if self._closed:
             return
         self.logs.log("ERROR" if code else "INFO", f"{name} exited with code {code}.")
-        if name == "scrcpy":
+        if name == "scrcpy" or "scrcpy" in name.lower():
             self._change(sessions=max(0, self._state["sessions"] - 1))
             if code:
                 self._error(f"scrcpy exited with code {code}. Open the console for details.")
@@ -529,13 +642,19 @@ class Deck(QObject):
                 assert self.runner.env == new_env
                 assert self.wireless.adb == new_adb
 
+                # Recompute capabilities
+                self._capabilities = get_all_capabilities(version, str(new_scrcpy))
+                self.capabilitiesChanged.emit()
+
                 prune_old_versions(root)
                 self._change(
                     scrcpyVersion=version,
                     scrcpyStatus="installed",
                     scrcpyProgress=100,
                     scrcpyError="",
+                    installedScrcpyVersions=[Path(p).name for p in get_installed_runtimes()],
                 )
+                self._refresh_version_manager_lists()
                 self.logs.log(
                     "INFO",
                     f"Scrcpy runtime successfully updated and synchronized to v{version}!",
@@ -641,15 +760,18 @@ class Deck(QObject):
 
     @Slot()
     def checkForUpdates(self):
-        if self._closed or self._state.get("updateStatus") == "downloading":
+        if self._closed or self._state.get("updateStatus") in ("checking", "downloading", "installing"):
             return
+        self._change(updateStatus="checking", updateProgress=0, updateError="")
+
         def check():
             try:
-                update = find_latest_update(VERSION)
-                if not self._closed:
-                    self._updateFound.emit(update)
+                update = find_latest_update()
+                self._updateFound.emit(update)
             except Exception as exc:
-                self.logs.log("WARN", f"Could not check for updates: {exc}")
+                self.logs.log("ERROR", f"Update check failed: {exc}")
+                self._updateStatusChanged.emit("error", str(exc))
+
         Thread(target=check, daemon=True).start()
 
     @Slot()
@@ -696,7 +818,7 @@ class Deck(QObject):
                 self._updateDownloaded.emit({
                     "installer_path": str(installer_path),
                     "op_id": op_id,
-                    "version": info.get("version"),
+                    "version": info["version"],
                 })
             except Exception as exc:
                 self.logs.log("ERROR", f"Update failed: {exc}")
@@ -713,7 +835,7 @@ class Deck(QObject):
     @Slot()
     def cancelScrcpyUpdate(self):
         self._scrcpy_cancel.set()
-        if self._state.get("scrcpyStatus") == "downloading":
+        if self._state.get("scrcpyStatus") in ("downloading", "installing"):
             self._change(scrcpyStatus="available", scrcpyProgress=0, scrcpyError="Download cancelled.")
 
     def _on_scrcpy_checked(self, info):
@@ -721,23 +843,33 @@ class Deck(QObject):
             return
         if info:
             self._scrcpy_info = info
-            latest = info["version"]
-            status = "available" if info.get("has_update") else "up-to-date"
-            self.logs.log("INFO", f"Genymobile/scrcpy: current v{self.scrcpy_version}, latest v{latest} ({status}).")
-            self._change(scrcpyLatest=latest, scrcpyStatus=status, scrcpyError="")
+            self.logs.log("INFO", f"Scrcpy update available: v{info['version']}")
+            self._change(
+                scrcpyLatest=info["version"],
+                scrcpyStatus="available",
+                scrcpyProgress=0,
+                scrcpyError="",
+                scrcpySize=info.get("size", 0),
+            )
         else:
-            self._change(scrcpyStatus="error", scrcpyError="Could not fetch release from Genymobile/scrcpy.")
+            self._scrcpy_info = None
+            self._change(scrcpyLatest="", scrcpyStatus="", scrcpyProgress=0, scrcpyError="")
 
     def _on_scrcpy_status_changed(self, status, error=""):
         if self._closed:
             return
-        self._change(scrcpyStatus=status, scrcpyError=error)
+        changes = {"scrcpyStatus": status, "scrcpyError": error}
+        if status == "available":
+            changes["scrcpyProgress"] = 0
+        self._change(**changes)
 
     @Slot(object)
     def _on_scrcpy_prepared(self, result):
         if self._closed:
             return
-        if not isinstance(result, dict) or result.get("op_id") != self._scrcpy_op_id:
+        if not isinstance(result, dict):
+            return
+        if result.get("op_id") != self._scrcpy_op_id and result != self._pending_scrcpy_runtime:
             return
 
         runtime_dir = result.get("runtime_dir")
@@ -758,32 +890,34 @@ class Deck(QObject):
             )
             return
 
+        self._pending_scrcpy_runtime = None
+        self._change(scrcpyStatus="installing", scrcpyError="")
+
         try:
             self._activate_runtime(runtime_dir, version)
-            self._pending_scrcpy_runtime = None
         except Exception as exc:
-            self.logs.log("ERROR", f"Scrcpy activation failed: {exc}")
+            self.logs.log("ERROR", f"Activation of scrcpy v{version} failed: {exc}")
             self._change(scrcpyStatus="error", scrcpyError=str(exc))
 
     @Slot()
     def checkScrcpyUpdate(self):
-        if self._closed or self._state.get("scrcpyStatus") == "downloading":
+        if self._closed or self._state.get("scrcpyStatus") in ("checking", "downloading", "installing"):
             return
-        self._change(scrcpyStatus="checking", scrcpyError="")
+        self._change(scrcpyStatus="checking", scrcpyProgress=0, scrcpyError="")
+
         def check():
             try:
                 info = find_latest_scrcpy_release(self.scrcpy_version)
-                if not self._closed:
-                    self._scrcpyChecked.emit(info)
+                self._scrcpyChecked.emit(info)
             except Exception as exc:
-                if not self._closed:
-                    self.logs.log("WARN", f"Scrcpy release check failed: {exc}")
-                    self._scrcpyStatusChanged.emit("error", str(exc))
+                self.logs.log("ERROR", f"Scrcpy update check failed: {exc}")
+                self._scrcpyStatusChanged.emit("error", str(exc))
+
         Thread(target=check, daemon=True).start()
 
     @Slot()
     def installScrcpyUpdate(self):
-        if self._closed or not self._scrcpy_info:
+        if self._closed or not (self._selected_scrcpy_release or self._scrcpy_info):
             return
         if self._state.get("scrcpyStatus") in ("downloading", "installing"):
             return
@@ -791,8 +925,10 @@ class Deck(QObject):
             self.logs.log("WARN", "Cannot install scrcpy update while Scrcpy Deck application update is in progress.")
             return
 
+        info = dict(self._selected_scrcpy_release or self._scrcpy_info)
+        target_version = info.get("version")
+
         # Check if already prepared and pending activation due to previous active sessions
-        target_version = self._scrcpy_info.get("version")
         if (
             self._pending_scrcpy_runtime
             and self._pending_scrcpy_runtime.get("version") == target_version
@@ -808,10 +944,35 @@ class Deck(QObject):
                 )
                 return
 
+        if self._state.get("sessions", 0) > 0:
+            self.logs.log("WARN", "Cannot change scrcpy runtime while mirroring sessions are active. Close them first.")
+            self._change(
+                scrcpyStatus="available",
+                scrcpyError="Cannot change runtime while active sessions are running. Please close all sessions.",
+            )
+            return
+
+        if target_version == self.scrcpy_version:
+            self.logs.log("INFO", f"Scrcpy v{target_version} is already the active runtime.")
+            return
+
+        # Check if version is already installed locally in versions/
+        local_dir = get_installed_runtime_path(target_version)
+        if local_dir:
+            self.logs.log("INFO", f"Activating locally installed scrcpy runtime v{target_version}...")
+            self._change(scrcpyStatus="installing", scrcpyError="")
+            try:
+                self._activate_runtime(local_dir, target_version)
+            except Exception as exc:
+                self.logs.log("ERROR", f"Activation failed: {exc}")
+                self._change(scrcpyStatus="error", scrcpyError=str(exc))
+            return
+
         self._scrcpy_cancel.clear()
         self._scrcpy_op_id += 1
         op_id = self._scrcpy_op_id
-        info = dict(self._scrcpy_info)
+        cancel_evt = self._scrcpy_cancel
+
         self._change(scrcpyStatus="downloading", scrcpyProgress=0, scrcpyError="")
 
         def run_update():
@@ -827,10 +988,10 @@ class Deck(QObject):
                     url,
                     zip_path,
                     on_progress=lambda pct: self._scrcpyProgress.emit(pct),
-                    cancel_event=self._scrcpy_cancel,
+                    cancel_event=cancel_evt,
                 )
                 if not success:
-                    if self._scrcpy_cancel.is_set():
+                    if cancel_evt.is_set():
                         self.logs.log("INFO", "Scrcpy download cancelled.")
                         self._scrcpyStatusChanged.emit("available", "")
                     else:
@@ -838,7 +999,7 @@ class Deck(QObject):
                         self._scrcpyStatusChanged.emit("error", "Download failed.")
                     return
 
-                if self._scrcpy_cancel.is_set():
+                if cancel_evt.is_set():
                     self.logs.log("INFO", "Scrcpy update cancelled before staging.")
                     self._scrcpyStatusChanged.emit("available", "")
                     return
@@ -846,25 +1007,21 @@ class Deck(QObject):
                 self.logs.log("INFO", "Staging and validating scrcpy runtime binaries...")
                 self._scrcpyStatusChanged.emit("installing", "")
 
-                from runtime_manager import (
-                    promote_staging_to_version,
-                    stage_and_validate_runtime,
-                )
-
-                staging_dir, detected_version = stage_and_validate_runtime(
+                import runtime_manager
+                staging_dir, detected_version = runtime_manager.stage_and_validate_runtime(
                     zip_path,
                     expected_version=info.get("version"),
                 )
 
-                if self._scrcpy_cancel.is_set():
+                if cancel_evt.is_set():
                     shutil.rmtree(staging_dir, ignore_errors=True)
-                    self.logs.log("INFO", "Scrcpy update cancelled after staging.")
+                    self.logs.log("INFO", "Scrcpy update cancelled before promotion.")
                     self._scrcpyStatusChanged.emit("available", "")
                     return
 
-                final_dir = promote_staging_to_version(staging_dir, detected_version)
+                final_dir = runtime_manager.promote_staging_to_version(staging_dir, detected_version)
 
-                # Worker emits immutable preparation result to the main thread
+                # Worker emits completion to the main thread
                 self._scrcpyPrepared.emit({
                     "version": detected_version,
                     "runtime_dir": str(final_dir),
@@ -876,9 +1033,518 @@ class Deck(QObject):
 
         Thread(target=run_update, daemon=True).start()
 
+    @Slot()
+    @Slot(bool)
+    def checkAllUpdates(self, force=False):
+        if self._closed:
+            return
+        self._change(
+            updateStatus="checking" if self._state.get("updateStatus") != "downloading" else self._state["updateStatus"],
+            scrcpyStatus="checking" if self._state.get("scrcpyStatus") != "downloading" else self._state["scrcpyStatus"],
+        )
+
+        def run_fetch():
+            try:
+                deck_entries = get_catalog("deck", force_refresh=force)
+                scrcpy_entries = get_catalog("scrcpy", force_refresh=force)
+                self._catalogLoaded.emit({
+                    "deck": [asdict(e) for e in deck_entries],
+                    "scrcpy": [asdict(e) for e in scrcpy_entries],
+                })
+            except Exception as exc:
+                self.logs.log("ERROR", f"Failed to check for updates: {exc}")
+                self._updateStatusChanged.emit("idle", "")
+                self._scrcpyStatusChanged.emit("idle", "")
+
+        Thread(target=run_fetch, daemon=True).start()
+
+    @Slot(object)
+    def _on_catalog_loaded(self, catalogs):
+        if self._closed or not isinstance(catalogs, dict):
+            return
+        with self._catalog_lock:
+            self._deck_releases = catalogs.get("deck", [])
+            self._scrcpy_releases = catalogs.get("scrcpy", [])
+            self._refresh_version_manager_lists()
+
+        deck_target = next((r for r in self._deck_releases if r.get("action_type") == "upgrade"), None)
+        if deck_target:
+            self._on_update_found({
+                "version": deck_target["version"],
+                "download_url": deck_target.get("download_url", ""),
+                "asset_name": deck_target.get("asset_name", ""),
+                "size": deck_target.get("size", 0),
+                "body": deck_target.get("body", ""),
+                "html_url": deck_target.get("html_url", ""),
+                "tag_name": deck_target.get("tag_name", ""),
+            })
+        else:
+            if self._state.get("updateStatus") == "checking":
+                self._change(updateStatus="installed", update="", updateProgress=100)
+
+        scrcpy_target = next((r for r in self._scrcpy_releases if r.get("action_type") == "upgrade"), None)
+        if scrcpy_target:
+            self._on_scrcpy_checked({
+                "version": scrcpy_target["version"],
+                "download_url": scrcpy_target.get("download_url", ""),
+                "asset_name": scrcpy_target.get("asset_name", ""),
+                "size": scrcpy_target.get("size", 0),
+                "body": scrcpy_target.get("body", ""),
+                "html_url": scrcpy_target.get("html_url", ""),
+                "tag_name": scrcpy_target.get("tag_name", ""),
+            })
+        else:
+            if self._state.get("scrcpyStatus") == "checking":
+                self._change(scrcpyStatus="installed", scrcpyProgress=100)
+
+        deck_pin = self._version_prefs.get("deck_pinning", "follow_latest")
+        if deck_target and deck_pin != "pinned":
+            self._notifications["deck"] = {
+                "visible": True,
+                "latest_version": deck_target["version"],
+                "current_version": VERSION,
+                "title": f"Scrcpy Deck v{deck_target['version']} is available",
+                "message": f"A newer stable version of Scrcpy Deck was released.",
+            }
+        else:
+            self._notifications["deck"]["visible"] = False
+
+        scrcpy_pin = self._version_prefs.get("scrcpy_pinning", "follow_latest")
+        if scrcpy_target and scrcpy_pin != "pinned":
+            self._notifications["scrcpy"] = {
+                "visible": True,
+                "latest_version": scrcpy_target["version"],
+                "current_version": self.scrcpy_version,
+                "title": f"scrcpy core v{scrcpy_target['version']} is available",
+                "message": f"A newer engine release is available for download.",
+            }
+        else:
+            self._notifications["scrcpy"]["visible"] = False
+
+        self.notificationsChanged.emit()
+
+    def _refresh_version_manager_lists(self):
+        installed_scrcpy_dirs = get_installed_runtimes()
+        installed_scrcpy_versions = [Path(p).name for p in installed_scrcpy_dirs]
+        if self.scrcpy_version not in installed_scrcpy_versions and self.scrcpy_version != "unknown":
+            installed_scrcpy_versions.append(self.scrcpy_version)
+
+        # 1. Deck releases
+        deck_labels = []
+        deck_versions = []
+        latest_deck_ver = self._deck_releases[0]["version"] if self._deck_releases else VERSION
+        for r in self._deck_releases:
+            v = r["version"]
+            deck_versions.append(v)
+            is_cur = (v == VERSION)
+            is_latest = (v == latest_deck_ver)
+            if is_cur and is_latest:
+                label = f"v{v} — Installed · Latest"
+            elif is_cur:
+                label = f"v{v} — Installed"
+            elif is_latest:
+                label = f"v{v} — Latest release"
+            else:
+                label = f"v{v} — Previous release"
+            deck_labels.append(label)
+
+        if not deck_labels:
+            deck_labels = [f"v{VERSION} — Installed · Latest"]
+            deck_versions = [VERSION]
+
+        cur_deck_idx = self._state.get("selectedDeckIndex", 0)
+        if cur_deck_idx >= len(deck_versions):
+            cur_deck_idx = 0
+        sel_deck_ver = deck_versions[cur_deck_idx]
+        sel_deck_entry = next((r for r in self._deck_releases if r["version"] == sel_deck_ver), None)
+
+        if not sel_deck_entry:
+            sel_deck_info = {
+                "version": sel_deck_ver,
+                "date": "Installed",
+                "size_str": "",
+                "action": "reinstall" if sel_deck_ver == VERSION else "install",
+                "html_url": f"https://github.com/{DECK_REPO}/releases",
+                "is_compatible": True,
+                "body": "",
+            }
+        else:
+            action = sel_deck_entry.get("action_type", "reinstall")
+            sel_deck_info = {
+                "version": sel_deck_entry["version"],
+                "date": format_date_str(sel_deck_entry.get("published_at", "")),
+                "size_str": format_size_bytes(sel_deck_entry.get("size", 0)),
+                "action": action,
+                "html_url": sel_deck_entry.get("html_url", f"https://github.com/{DECK_REPO}/releases"),
+                "is_compatible": sel_deck_entry.get("is_compatible", True),
+                "body": sel_deck_entry.get("body", ""),
+            }
+
+        act = sel_deck_info.get("action", "install")
+        ver = sel_deck_info["version"]
+        if act == "upgrade":
+            deck_act_text = f"Upgrade to v{ver}"
+        elif act == "downgrade":
+            deck_act_text = f"Downgrade to v{ver}"
+        elif act == "reinstall":
+            deck_act_text = f"Reinstall v{ver}"
+        else:
+            deck_act_text = f"Install v{ver}"
+
+        # 2. Scrcpy releases
+        scrcpy_labels = []
+        scrcpy_versions = []
+        latest_scrcpy_ver = self._scrcpy_releases[0]["version"] if self._scrcpy_releases else self.scrcpy_version
+        for r in self._scrcpy_releases:
+            v = r["version"]
+            scrcpy_versions.append(v)
+            is_active = (v == self.scrcpy_version)
+            is_local = (v in installed_scrcpy_versions)
+            is_latest = (v == latest_scrcpy_ver)
+            if is_active and is_latest:
+                label = f"v{v} — Active · Latest"
+            elif is_active:
+                label = f"v{v} — Active"
+            elif is_local:
+                label = f"v{v} — Available locally"
+            elif is_latest:
+                label = f"v{v} — Latest release"
+            else:
+                label = f"v{v} — Available"
+            scrcpy_labels.append(label)
+
+        if not scrcpy_labels:
+            scrcpy_labels = [f"v{self.scrcpy_version} — Active · Current"]
+            scrcpy_versions = [self.scrcpy_version]
+
+        cur_scrcpy_idx = self._state.get("selectedScrcpyIndex", 0)
+        if cur_scrcpy_idx >= len(scrcpy_versions):
+            cur_scrcpy_idx = 0
+        sel_scrcpy_ver = scrcpy_versions[cur_scrcpy_idx]
+        sel_scrcpy_entry = next((r for r in self._scrcpy_releases if r["version"] == sel_scrcpy_ver), None)
+
+        is_installed = sel_scrcpy_ver in installed_scrcpy_versions or sel_scrcpy_ver == self.scrcpy_version
+        if not sel_scrcpy_entry:
+            sel_scrcpy_info = {
+                "version": sel_scrcpy_ver,
+                "date": "Active" if sel_scrcpy_ver == self.scrcpy_version else "Installed",
+                "size_str": "",
+                "is_installed": is_installed,
+                "html_url": f"https://github.com/{SCRCPY_REPO}/releases",
+                "is_compatible": True,
+                "body": "",
+            }
+        else:
+            sel_scrcpy_info = {
+                "version": sel_scrcpy_entry["version"],
+                "date": format_date_str(sel_scrcpy_entry.get("published_at", "")),
+                "size_str": format_size_bytes(sel_scrcpy_entry.get("size", 0)),
+                "is_installed": is_installed,
+                "html_url": sel_scrcpy_entry.get("html_url", f"https://github.com/{SCRCPY_REPO}/releases"),
+                "is_compatible": sel_scrcpy_entry.get("is_compatible", True),
+                "body": sel_scrcpy_entry.get("body", ""),
+            }
+
+        if sel_scrcpy_ver == self.scrcpy_version:
+            scrcpy_act_text = "Active runtime"
+        elif is_installed:
+            scrcpy_act_text = f"Activate v{sel_scrcpy_ver}"
+        else:
+            scrcpy_act_text = f"Install v{sel_scrcpy_ver}"
+
+        sel_caps = get_all_capabilities(sel_scrcpy_ver)
+        incompats = summarize_incompatibilities(sel_caps)
+
+        self._change(
+            deckReleaseLabels=deck_labels,
+            deckReleaseVersions=deck_versions,
+            selectedDeckIndex=cur_deck_idx,
+            selectedDeckInfo=sel_deck_info,
+            deckActionText=deck_act_text,
+            scrcpyReleaseLabels=scrcpy_labels,
+            scrcpyReleaseVersions=scrcpy_versions,
+            selectedScrcpyIndex=cur_scrcpy_idx,
+            selectedScrcpyInfo=sel_scrcpy_info,
+            scrcpyActionText=scrcpy_act_text,
+            scrcpyCompatibilitySummary=incompats,
+            installedScrcpyVersions=installed_scrcpy_versions,
+        )
+        self.versionManagerChanged.emit()
+
+    @Slot(int)
+    def selectDeckRelease(self, index):
+        if self._closed:
+            return
+        versions = self._state.get("deckReleaseVersions", [])
+        if 0 <= index < len(versions):
+            self._change(selectedDeckIndex=index)
+            ver = versions[index]
+            self._selected_deck_release = next((r for r in self._deck_releases if r["version"] == ver), None)
+            self._refresh_version_manager_lists()
+
+    @Slot(int)
+    def selectScrcpyRelease(self, index):
+        if self._closed:
+            return
+        versions = self._state.get("scrcpyReleaseVersions", [])
+        if 0 <= index < len(versions):
+            self._change(selectedScrcpyIndex=index)
+            ver = versions[index]
+            self._selected_scrcpy_release = next((r for r in self._scrcpy_releases if r["version"] == ver), None)
+            self._refresh_version_manager_lists()
+
+    @Slot(str)
+    def setDeckPinning(self, preference):
+        if preference in ("follow_latest", "pinned"):
+            self._version_prefs["deck_pinning"] = preference
+            if preference == "pinned":
+                self._version_prefs["deck_pinned_version"] = VERSION
+            set_version_preference("deck_pinning", preference)
+            if preference == "pinned":
+                set_version_preference("deck_pinned_version", VERSION)
+            self._change(deckPinningPreference=preference)
+            self._refresh_version_manager_lists()
+
+    @Slot(str)
+    def setScrcpyPinning(self, preference):
+        if preference in ("follow_latest", "pinned"):
+            self._version_prefs["scrcpy_pinning"] = preference
+            if preference == "pinned":
+                self._version_prefs["scrcpy_pinned_version"] = self.scrcpy_version
+            set_version_preference("scrcpy_pinning", preference)
+            if preference == "pinned":
+                set_version_preference("scrcpy_pinned_version", self.scrcpy_version)
+            self._change(scrcpyPinningPreference=preference)
+            self._refresh_version_manager_lists()
+
+    @Slot()
+    def cleanUnusedRuntimes(self):
+        try:
+            pinned = self._version_prefs.get("scrcpy_pinned_version", "")
+            keep = {self.scrcpy_version}
+            if pinned:
+                keep.add(pinned)
+            removed = clean_unused_runtimes(keep_versions=keep)
+            if removed:
+                self.logs.log("INFO", f"Cleaned up {len(removed)} old scrcpy runtime(s): {', '.join(removed)}")
+            else:
+                self.logs.log("INFO", "No unused runtimes to clean.")
+            self._refresh_version_manager_lists()
+        except Exception as exc:
+            self.logs.log("ERROR", f"Failed to clean runtimes: {exc}")
+
+    @Slot()
+    @Slot(bool)
+    def installSelectedDeck(self, confirmed_downgrade=False):
+        if self._closed:
+            return
+        info = self._selected_deck_release or self._update_info
+        if not info:
+            self.checkForUpdates()
+            return
+        if self._state.get("updateStatus") in ("downloading", "installing"):
+            return
+
+        if not info.get("download_url"):
+            self._change(updateStatus="error", updateError="Selected release does not have a downloadable installer.")
+            return
+
+        if info.get("action_type") == "downgrade" and not confirmed_downgrade:
+            return
+
+        try:
+            backup_path = backup_user_settings()
+            if backup_path:
+                self.logs.log("INFO", f"Created settings backup at: {backup_path.name}")
+        except Exception as exc:
+            self.logs.log("WARN", f"Could not create settings backup: {exc}")
+
+        self._update_cancel.clear()
+        self._deck_op_id += 1
+        self._update_op_id = self._deck_op_id
+        op_id = self._deck_op_id
+        cancel_evt = self._update_cancel
+
+        self._change(updateStatus="downloading", updateProgress=0, updateError="")
+        url = info["download_url"]
+        asset_name = info.get("asset_name") or f"ScrcpyDeck-{info['version']}-setup.exe"
+        version_str = info["version"]
+
+        def run_deck_download():
+            try:
+                temp_dir = Path(tempfile.gettempdir()) / "ScrcpyDeckUpdate"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                installer_path = temp_dir / asset_name
+
+                self.logs.log("INFO", f"Downloading Scrcpy Deck v{version_str}...")
+                success = download_installer(
+                    url,
+                    installer_path,
+                    on_progress=lambda pct: self._updateProgress.emit(pct),
+                    cancel_event=cancel_evt,
+                )
+                if not success:
+                    if cancel_evt.is_set():
+                        self.logs.log("INFO", "Scrcpy Deck download cancelled.")
+                        self._updateStatusChanged.emit("available", "")
+                    else:
+                        self.logs.log("ERROR", "Scrcpy Deck download failed.")
+                        self._updateStatusChanged.emit("error", "Download failed. Please check network connection.")
+                    return
+
+                self._updateDownloaded.emit({
+                    "installer_path": str(installer_path),
+                    "op_id": op_id,
+                    "version": version_str,
+                })
+            except Exception as exc:
+                self.logs.log("ERROR", f"Update failed: {exc}")
+                self._updateStatusChanged.emit("error", str(exc))
+
+        Thread(target=run_deck_download, daemon=True).start()
+
+    @Slot()
+    @Slot(bool)
+    def installOrActivateSelectedScrcpy(self, confirmed_incompatible=False):
+        if self._closed:
+            return
+        info = self._selected_scrcpy_release or self._scrcpy_info
+        if not info:
+            self.checkScrcpyUpdate()
+            return
+        if self._state.get("scrcpyStatus") in ("downloading", "installing"):
+            return
+        if self._state.get("updateStatus") in ("downloading", "installing"):
+            self.logs.log("WARN", "Cannot install scrcpy core while application update is in progress.")
+            return
+
+        target_version = info.get("version")
+
+        # Check if already prepared and pending activation due to previous active sessions
+        if (
+            self._pending_scrcpy_runtime
+            and self._pending_scrcpy_runtime.get("version") == target_version
+        ):
+            if self._state.get("sessions", 0) == 0:
+                self._change(scrcpyStatus="installing", scrcpyError="")
+                self._on_scrcpy_prepared(self._pending_scrcpy_runtime)
+                return
+            else:
+                self._change(
+                    scrcpyStatus="available",
+                    scrcpyError="Cannot install while active sessions are running. Close sessions and click Install.",
+                )
+                return
+
+        if self._state.get("sessions", 0) > 0:
+            self.logs.log("WARN", "Cannot change scrcpy runtime while mirroring sessions are active. Close them first.")
+            self._change(
+                scrcpyStatus="available",
+                scrcpyError="Cannot change runtime while active sessions are running. Please close all sessions.",
+            )
+            return
+
+        if target_version == self.scrcpy_version:
+            self.logs.log("INFO", f"Scrcpy v{target_version} is already the active runtime.")
+            return
+
+        # Check if version is already installed locally in versions/
+        local_dir = get_installed_runtime_path(target_version)
+        if local_dir:
+            self.logs.log("INFO", f"Activating locally installed scrcpy runtime v{target_version}...")
+            self._change(scrcpyStatus="installing", scrcpyError="")
+            try:
+                self._activate_runtime(local_dir, target_version)
+            except Exception as exc:
+                self.logs.log("ERROR", f"Activation failed: {exc}")
+                self._change(scrcpyStatus="error", scrcpyError=str(exc))
+            return
+
+        if not info.get("download_url"):
+            self._change(scrcpyStatus="error", scrcpyError="No download URL available for this scrcpy release.")
+            return
+
+        self._scrcpy_cancel.clear()
+        self._scrcpy_op_id += 1
+        op_id = self._scrcpy_op_id
+        cancel_evt = self._scrcpy_cancel
+
+        self._change(scrcpyStatus="downloading", scrcpyProgress=0, scrcpyError="")
+        url = info["download_url"]
+        asset_name = info.get("asset_name") or f"scrcpy-win64-{target_version}.zip"
+
+        def run_scrcpy_fetch():
+            try:
+                temp_dir = Path(tempfile.gettempdir()) / "ScrcpyDeckUpdate"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                zip_path = temp_dir / asset_name
+
+                self.logs.log("INFO", f"Downloading scrcpy core v{target_version}...")
+                success = download_installer(
+                    url,
+                    zip_path,
+                    on_progress=lambda pct: self._scrcpyProgress.emit(pct),
+                    cancel_event=cancel_evt,
+                )
+                if not success:
+                    if cancel_evt.is_set():
+                        self.logs.log("INFO", "Scrcpy download cancelled.")
+                        self._scrcpyStatusChanged.emit("available", "")
+                    else:
+                        self.logs.log("ERROR", "Scrcpy download failed.")
+                        self._scrcpyStatusChanged.emit("error", "Download failed.")
+                    return
+
+                if cancel_evt.is_set():
+                    self.logs.log("INFO", "Scrcpy update cancelled before staging.")
+                    self._scrcpyStatusChanged.emit("available", "")
+                    return
+
+                self.logs.log("INFO", "Staging and validating scrcpy binaries...")
+                self._scrcpyStatusChanged.emit("installing", "")
+
+                import runtime_manager
+                staging_dir, detected_version = runtime_manager.stage_and_validate_runtime(
+                    zip_path,
+                    expected_version=target_version,
+                )
+
+                if cancel_evt.is_set():
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+                    self.logs.log("INFO", "Scrcpy update cancelled before promotion.")
+                    self._scrcpyStatusChanged.emit("available", "")
+                    return
+
+                final_dir = runtime_manager.promote_staging_to_version(staging_dir, detected_version)
+
+                self._scrcpyPrepared.emit({
+                    "version": detected_version,
+                    "runtime_dir": str(final_dir),
+                    "op_id": op_id,
+                })
+            except Exception as exc:
+                self.logs.log("ERROR", f"Scrcpy update failed: {exc}")
+                self._scrcpyStatusChanged.emit("error", str(exc))
+
+        Thread(target=run_scrcpy_fetch, daemon=True).start()
+
+    @Slot()
+    def dismissDeckNotification(self):
+        self._notifications["deck"]["visible"] = False
+        self.notificationsChanged.emit()
+
+    @Slot()
+    def dismissScrcpyNotification(self):
+        self._notifications["scrcpy"]["visible"] = False
+        self.notificationsChanged.emit()
+
+    @Slot(str, str)
+    def openHelpSection(self, page, section):
+        self.navigateToSection.emit(page, section)
+
     def startup(self):
         self.scan()
-        self.checkForUpdates()
+        QTimer.singleShot(400, lambda: self.checkAllUpdates(force=False))
 
     @Slot()
     def shutdown(self):

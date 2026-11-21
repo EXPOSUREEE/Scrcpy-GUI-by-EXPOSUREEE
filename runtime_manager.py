@@ -1,4 +1,4 @@
-"""Atomic, versioned scrcpy runtime management with staging and rollback."""
+"""Atomic, versioned scrcpy runtime management with staging, multi-version retention, and rollback."""
 import json
 import os
 from pathlib import Path
@@ -116,6 +116,21 @@ def write_active_pointer(
             except OSError:
                 pass
         raise exc
+
+
+def remove_active_pointer(runtime_root: Path = None) -> bool:
+    """Remove active.json safely if it exists (used for first-activation rollback)."""
+    if runtime_root is None:
+        from assets import get_writable_runtime
+        runtime_root = get_writable_runtime()
+    target = Path(runtime_root) / "active.json"
+    if target.exists():
+        try:
+            target.unlink()
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def is_valid_runtime_dir(directory: Path) -> bool:
@@ -280,8 +295,74 @@ def promote_staging_to_version(
     return target_dir
 
 
+def get_installed_runtimes(runtime_root: Path = None) -> list[str]:
+    """Scan versions/ directory and return list of valid installed version strings, newest first."""
+    if runtime_root is None:
+        from assets import get_writable_runtime
+        runtime_root = get_writable_runtime()
+    versions_root = Path(runtime_root) / "versions"
+    if not versions_root.is_dir():
+        return []
+
+    installed = []
+    for item in versions_root.iterdir():
+        if item.is_dir() and not item.name.startswith("."):
+            if is_valid_runtime_dir(item):
+                installed.append(item.name)
+
+    installed.sort(key=lambda v: parse_version(v) or (0, 0, 0), reverse=True)
+    return installed
+
+
+def get_installed_runtime_path(version: str, runtime_root: Path = None) -> Path | None:
+    """Return path to installed version directory if it exists and is valid."""
+    if runtime_root is None:
+        from assets import get_writable_runtime
+        runtime_root = get_writable_runtime()
+    target = Path(runtime_root) / "versions" / version
+    if target.is_dir() and is_valid_runtime_dir(target):
+        return target
+    return None
+
+
+def clean_unused_runtimes(runtime_root: Path = None, keep_versions: set = None) -> list[str]:
+    """Explicitly clean up unneeded locally installed versions while retaining active and previous runtimes.
+
+    Returns list of removed version names.
+    """
+    if runtime_root is None:
+        from assets import get_writable_runtime
+        runtime_root = get_writable_runtime()
+
+    versions_root = Path(runtime_root) / "versions"
+    if not versions_root.is_dir():
+        return []
+
+    keep = set(keep_versions or ())
+    pointer = get_active_pointer(runtime_root)
+    if pointer:
+        if pointer.get("version"):
+            keep.add(str(pointer["version"]))
+        if pointer.get("relative_path"):
+            keep.add(Path(pointer["relative_path"]).name)
+        if pointer.get("previous_relative_path"):
+            keep.add(Path(pointer["previous_relative_path"]).name)
+
+    removed = []
+    for item in versions_root.iterdir():
+        if item.is_dir() and item.name not in keep and not item.name.startswith("."):
+            try:
+                shutil.rmtree(item, ignore_errors=True)
+                removed.append(item.name)
+            except OSError:
+                pass
+    return removed
+
+
 def prune_old_versions(runtime_root: Path = None, keep_versions: set = None):
-    """Retention policy: keep current active version plus one previous known-good version."""
+    """Retention policy: keep current active version, previous known-good version,
+    and any explicitly retained versions in keep_versions.
+    """
     if runtime_root is None:
         from assets import get_writable_runtime
         runtime_root = get_writable_runtime()
@@ -301,7 +382,12 @@ def prune_old_versions(runtime_root: Path = None, keep_versions: set = None):
             keep.add(Path(pointer["previous_relative_path"]).name)
 
     for item in versions_root.iterdir():
-        if item.is_dir() and item.name not in keep and not item.name.startswith("."):
+        if item.is_dir() and item.name.startswith(".trash"):
+            try:
+                shutil.rmtree(item, ignore_errors=True)
+            except OSError:
+                pass
+        elif item.is_dir() and item.name not in keep and not item.name.startswith("."):
             try:
                 shutil.rmtree(item, ignore_errors=True)
             except OSError:

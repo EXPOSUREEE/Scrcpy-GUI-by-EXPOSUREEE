@@ -160,9 +160,10 @@ ApplicationWindow {
                     onClicked: deck.launch()
                 }
             }
+            /* Scrcpy Deck application notification banner */
             Rectangle {
                 id: updateBanner
-                visible: !!deck.state.update && deck.state.updateStatus !== "installing"
+                visible: (!!deck.state.update || (deck.notifications && deck.notifications.deck && deck.notifications.deck.visible)) && deck.state.updateStatus !== "installing"
                 Layout.fillWidth: true; Layout.leftMargin: shell.gutter; Layout.rightMargin: shell.gutter
                 Layout.bottomMargin: 10
                 implicitHeight: 46
@@ -179,7 +180,7 @@ ApplicationWindow {
                               ? ("Downloading update v" + deck.state.update + " (" + deck.state.updateProgress + "%)…")
                               : deck.state.updateStatus === "error"
                               ? ("Update failed: " + (deck.state.updateError || "Could not download"))
-                              : ("Update available: Scrcpy Deck v" + deck.state.update)
+                              : (deck.notifications && deck.notifications.deck ? deck.notifications.deck.title : ("Update available: Scrcpy Deck v" + deck.state.update))
                         color: Theme.text
                     }
                     DeckButton {
@@ -189,15 +190,84 @@ ApplicationWindow {
                         onClicked: deck.installUpdate()
                     }
                     DeckButton {
+                        visible: deck.state.updateStatus !== "downloading"
+                        compact: true
+                        text: "View details"
+                        onClicked: {
+                            deck.dismissDeckNotification()
+                            shell.page = 4
+                            if (loader.item) loader.item.section = "Updates"
+                        }
+                    }
+                    DeckButton {
                         visible: deck.state.updateStatus === "downloading"
                         compact: true
                         text: "Cancel"
                         onClicked: deck.cancelUpdate()
                     }
                     DeckButton {
+                        visible: deck.state.updateStatus !== "downloading"
                         compact: true
-                        text: "Details"
-                        onClicked: updateDialog.open()
+                        text: "Later"
+                        onClicked: deck.dismissDeckNotification()
+                    }
+                    DeckButton {
+                        visible: deck.state.updateStatus !== "downloading"
+                        compact: true; glyph: "close"
+                        Accessible.name: "Dismiss notification"
+                        onClicked: deck.dismissDeckNotification()
+                    }
+                }
+            }
+
+            /* Genymobile scrcpy engine notification banner */
+            Rectangle {
+                id: scrcpyBanner
+                visible: (deck.notifications && deck.notifications.scrcpy && deck.notifications.scrcpy.visible) || (deck.state.scrcpyStatus === "downloading")
+                Layout.fillWidth: true; Layout.leftMargin: shell.gutter; Layout.rightMargin: shell.gutter
+                Layout.bottomMargin: 10
+                implicitHeight: 46
+                radius: 10
+                color: Theme.accentSoft
+                border.color: Theme.accent
+                border.width: 1
+                RowLayout {
+                    anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 10
+                    Glyph { name: "tools"; size: 18; color: Theme.accent }
+                    Type {
+                        Layout.fillWidth: true; font.weight: Font.DemiBold
+                        text: deck.state.scrcpyStatus === "downloading"
+                              ? ("Downloading scrcpy core binaries (" + deck.state.scrcpyProgress + "%)…")
+                              : (deck.notifications && deck.notifications.scrcpy ? deck.notifications.scrcpy.title : "New scrcpy core engine available")
+                        color: Theme.text
+                    }
+                    DeckButton {
+                        visible: deck.state.scrcpyStatus !== "downloading"
+                        primary: true; compact: true
+                        text: "View update"
+                        onClicked: {
+                            deck.dismissScrcpyNotification()
+                            shell.page = 4
+                            if (loader.item) loader.item.section = "Updates"
+                        }
+                    }
+                    DeckButton {
+                        visible: deck.state.scrcpyStatus === "downloading"
+                        compact: true
+                        text: "Cancel"
+                        onClicked: deck.cancelScrcpyUpdate()
+                    }
+                    DeckButton {
+                        visible: deck.state.scrcpyStatus !== "downloading"
+                        compact: true
+                        text: "Later"
+                        onClicked: deck.dismissScrcpyNotification()
+                    }
+                    DeckButton {
+                        visible: deck.state.scrcpyStatus !== "downloading"
+                        compact: true; glyph: "close"
+                        Accessible.name: "Dismiss notification"
+                        onClicked: deck.dismissScrcpyNotification()
                     }
                 }
             }
@@ -409,6 +479,14 @@ ApplicationWindow {
         target: deck
         function onRecoveryOffered(index) { recovery.target = index; recovery.open() }
         function onPaired() { shell.pairCode = "" }
+        function onNavigateToSection(targetPage, targetSection) {
+            if (targetPage === "help") {
+                shell.page = 4
+                if (loader.item) {
+                    loader.item.section = targetSection
+                }
+            }
+        }
     }
     Shortcut { sequence: "Ctrl+,"; onActivated: shell.openQuick() }
     Shortcut { sequence: "F5"; onActivated: deck.scan() }

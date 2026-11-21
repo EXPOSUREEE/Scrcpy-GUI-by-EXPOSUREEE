@@ -40,7 +40,10 @@ Item {
         trash: "M4 6H20 M9 6V3H15V6 M6 6L7 21H17L18 6 M10 10V17 M14 10V17",
         check: "M5 12L10 17L19 7",
         circle: "M20 12A8 8 0 1 1 4 12A8 8 0 0 1 20 12Z",
-        switch: "M16 4L20 8L16 12 M20 8H4 M8 20L4 16L8 12 M4 16H20"
+        switch: "M16 4L20 8L16 12 M20 8H4 M8 20L4 16L8 12 M4 16H20",
+        warning: "M12 4L2 20H22L12 4Z M12 10V14 M12 17V17.5",
+        close: "M18 6L6 18 M6 6L18 18",
+        cancel: "M18 6L6 18 M6 6L18 18"
     })
 
     Shape {

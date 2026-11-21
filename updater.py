@@ -1,4 +1,5 @@
 """Software update discovery, download, and execution for Scrcpy Deck."""
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -8,10 +9,19 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import uuid
 
-GITHUB_REPO = "Yavagu/Scrcpy-GUI-by-EXPOSUREEE"
+from release_catalog import (
+    DECK_REPO,
+    SCRCPY_REPO,
+    ReleaseEntry,
+    get_catalog,
+    parse_semver,
+)
+
+GITHUB_REPO = DECK_REPO
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
-SCRCPY_REPO = "Genymobile/scrcpy"
+VERSION_PREFS_FILE = "version_preferences.json"
 
 
 def parse_version(text):
@@ -20,13 +30,7 @@ def parse_version(text):
     Supports formats like '4.0.0', 'v4.0.1', '3.1', 'v3.1', 'ScrcpyDeck 4.0.2', etc.
     Returns (major, minor, patch) as ints, or None if no valid version is found.
     """
-    if not text:
-        return None
-    match = re.search(r"\bv?(\d+)\.(\d+)(?:\.(\d+))?\b", str(text), re.IGNORECASE)
-    if match:
-        patch = int(match.group(3)) if match.group(3) is not None else 0
-        return (int(match.group(1)), int(match.group(2)), patch)
-    return None
+    return parse_semver(text)
 
 
 def format_version(version_tuple):
@@ -39,31 +43,8 @@ def select_installer_asset(assets):
 
     Prioritizes .exe assets containing 'setup' or 'installer', then any .exe.
     """
-    candidates = []
-    for asset in assets:
-        name = asset.get("name", "")
-        url = asset.get("browser_download_url", "")
-        if not name or not url:
-            continue
-        if name.lower().endswith(".exe"):
-            candidates.append(asset)
-
-    if not candidates:
-        return None
-
-    def score(asset):
-        name = asset.get("name", "").lower()
-        pts = 0
-        if "setup" in name or "installer" in name:
-            pts += 10
-        if "scrcpy" in name or "deck" in name:
-            pts += 5
-        if "x64" in name or "win64" in name:
-            pts += 2
-        return pts
-
-    candidates.sort(key=score, reverse=True)
-    return candidates[0]
+    from release_catalog import select_deck_asset
+    return select_deck_asset(assets)
 
 
 def find_latest_update(current_version_str, repo=GITHUB_REPO, timeout=6):
@@ -166,7 +147,6 @@ def find_latest_scrcpy_release(current_version_str="", repo=SCRCPY_REPO, timeout
 
     current_ver = parse_version(current_version_str)
 
-    # Prioritize 64-bit windows zip archive
     zip_asset = None
     for asset in rel.get("assets", []):
         asset_name = asset.get("name", "")
@@ -246,6 +226,82 @@ def download_installer(url, target_path, on_progress=None, cancel_event=None, ti
             on_progress(100)
         return True
     return False
+
+
+def backup_user_settings(profile_dir: Path = None) -> Path | None:
+    """Create a timestamped backup of the user configuration before update/downgrade."""
+    if profile_dir is None:
+        from PySide6.QtCore import QStandardPaths
+        p_str = os.environ.get("SCRCPY_DECK_PROFILE_DIR")
+        if p_str:
+            profile_dir = Path(p_str)
+        else:
+            profile_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
+
+    config_file = profile_dir / "config.json"
+    if not config_file.is_file():
+        return None
+
+    backups_dir = profile_dir / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_file = backups_dir / f"config_backup_{ts}.json"
+    try:
+        shutil.copy2(config_file, backup_file)
+        return backup_file
+    except OSError:
+        return None
+
+
+def get_version_preferences(profile_dir: Path = None) -> dict:
+    """Load user version manager preferences (pins, dismissed notifications, etc.)."""
+    if profile_dir is None:
+        from PySide6.QtCore import QStandardPaths
+        p_str = os.environ.get("SCRCPY_DECK_PROFILE_DIR")
+        if p_str:
+            profile_dir = Path(p_str)
+        else:
+            profile_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
+    defaults = {
+        "deck_pinning": "follow_latest",
+        "scrcpy_pinning": "follow_latest",
+        "deck_pin": "latest",
+        "scrcpy_pin": "latest",
+        "dismissed_deck_notifications": [],
+        "dismissed_scrcpy_notifications": [],
+        "show_prereleases": False,
+    }
+    prefs_file = profile_dir / VERSION_PREFS_FILE
+    if prefs_file.is_file():
+        try:
+            data = json.loads(prefs_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                defaults.update(data)
+                return defaults
+        except Exception:
+            pass
+    return defaults
+
+
+def set_version_preference(key: str, val, profile_dir: Path = None):
+    """Persist a single version preference atomically."""
+    if profile_dir is None:
+        from PySide6.QtCore import QStandardPaths
+        p_str = os.environ.get("SCRCPY_DECK_PROFILE_DIR")
+        if p_str:
+            profile_dir = Path(p_str)
+        else:
+            profile_dir = Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
+    prefs = get_version_preferences(profile_dir)
+    prefs[key] = val
+    try:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        prefs_file = profile_dir / VERSION_PREFS_FILE
+        tmp_file = profile_dir / f".prefs_{os.getpid()}_{uuid.uuid4().hex}.tmp"
+        tmp_file.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+        tmp_file.replace(prefs_file)
+    except Exception:
+        pass
 
 
 def get_target_executable():
