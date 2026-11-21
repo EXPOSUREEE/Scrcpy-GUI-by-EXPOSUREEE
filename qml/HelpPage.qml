@@ -17,7 +17,9 @@ Sheet {
                 selected: page.section === text
                 onClicked: {
                     page.section = text
-                    if (text === "Updates" && (!deck.state.deckReleases || deck.state.deckReleases.length === 0)) {
+                    if (text === "Updates"
+                            && ((!deck.state.deckReleases || deck.state.deckReleases.length === 0)
+                                || (!deck.state.scrcpyReleases || deck.state.scrcpyReleases.length === 0))) {
                         deck.checkAllUpdates(false)
                     }
                 }
@@ -45,8 +47,12 @@ Sheet {
                 spacing: 2
                 Type { text: "Latest stable"; font.pixelSize: 12; quiet: true }
                 Type {
-                    text: deck.state.update ? ("v" + deck.state.update + " (Update available)")
-                        : (deck.state.updateStatus === "checking" ? "Checking…" : ("v" + deck.version + " (Latest)"))
+                    text: deck.state.updateStatus === "checking" ? "Checking…"
+                        : deck.state.updateStatus === "error" ? "Check failed"
+                        : deck.state.deckLatest ? ("v" + deck.state.deckLatest
+                            + (deck.state.updateStatus === "offline" ? " (Cached — offline)"
+                               : deck.state.update ? " (Update available)" : " (Up to date)"))
+                        : "Not checked"
                     color: deck.state.update ? Theme.accent : Theme.text
                     font.weight: Font.DemiBold; font.pixelSize: 15
                 }
@@ -108,9 +114,14 @@ Sheet {
             text: "Update error: " + deck.state.updateError
         }
         Type {
-            visible: !deck.state.update && deck.state.updateStatus !== "checking" && deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing" && deck.state.updateStatus !== "error"
+            visible: deck.state.updateStatus === "up-to-date"
             Layout.fillWidth: true; color: Theme.positive
             text: "✓ Scrcpy Deck is up to date."
+        }
+        Type {
+            visible: deck.state.updateStatus === "offline"
+            Layout.fillWidth: true; color: Theme.amber; wrapMode: Text.Wrap
+            text: "Offline — showing the most recently cached Scrcpy Deck releases."
         }
 
         Flow {
@@ -120,6 +131,7 @@ Sheet {
                 text: deck.state.deckActionText || "Install"
                 glyph: "download"
                 enabled: deck.state.updateStatus !== "downloading" && deck.state.updateStatus !== "installing"
+                    && !!deck.state.selectedDeckInfo && !!deck.state.selectedDeckInfo.is_compatible
                 onClicked: {
                     if (deck.state.selectedDeckInfo && deck.state.selectedDeckInfo.action === "downgrade") {
                         downgradeDialog.open()
@@ -181,8 +193,12 @@ Sheet {
                 spacing: 2
                 Type { text: "Latest stable"; font.pixelSize: 12; quiet: true }
                 Type {
-                    text: deck.state.scrcpyLatest ? ("v" + deck.state.scrcpyLatest + (deck.state.scrcpyStatus === "available" ? " (Update available)" : " (Up to date)"))
-                        : (deck.state.scrcpyStatus === "checking" ? "Checking…" : "Not checked")
+                    text: deck.state.scrcpyStatus === "checking" ? "Checking…"
+                        : deck.state.scrcpyStatus === "error" ? "Check failed"
+                        : deck.state.scrcpyLatest ? ("v" + deck.state.scrcpyLatest
+                            + (deck.state.scrcpyStatus === "offline" ? " (Cached — offline)"
+                               : deck.state.scrcpyStatus === "available" ? " (Update available)" : " (Up to date)"))
+                        : "Not checked"
                     color: deck.state.scrcpyStatus === "available" ? Theme.accent : Theme.text
                     font.weight: Font.DemiBold; font.pixelSize: 15
                 }
@@ -284,6 +300,11 @@ Sheet {
             visible: deck.state.scrcpyStatus === "error"
             Layout.fillWidth: true; color: Theme.danger; wrapMode: Text.Wrap
             text: "Scrcpy update error: " + deck.state.scrcpyError
+        }
+        Type {
+            visible: deck.state.scrcpyStatus === "offline"
+            Layout.fillWidth: true; color: Theme.amber; wrapMode: Text.Wrap
+            text: "Offline — showing the most recently cached scrcpy releases."
         }
 
         Flow {

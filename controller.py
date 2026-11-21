@@ -84,6 +84,83 @@ def format_size_bytes(bytes_int: int) -> str:
     return f"{bytes_int / (1024 * 1024):.1f} MB"
 
 
+def _same_version(left, right) -> bool:
+    """Compare display versions semantically (``5.0`` equals ``5.0.0``)."""
+    left_tuple = parse_semver(str(left or ""))
+    right_tuple = parse_semver(str(right or ""))
+    return bool(left_tuple and right_tuple and left_tuple == right_tuple)
+
+
+def normalize_release_for_ui(entry, component: str, installed_version: str) -> dict:
+    """Return the single release schema consumed by controller state and QML.
+
+    ``ReleaseEntry`` field names intentionally remain unchanged because they are
+    also the persistent cache schema.  This boundary accepts both those objects
+    and legacy dictionaries, including dictionaries already normalized by older
+    tests or callers.
+    """
+    if isinstance(entry, ReleaseEntry):
+        raw = entry.to_dict()
+    elif isinstance(entry, dict):
+        raw = dict(entry)
+    else:
+        raise TypeError(f"Unsupported release entry type: {type(entry).__name__}")
+
+    version = str(raw.get("version") or raw.get("version_str") or "").strip()
+    version_tuple = raw.get("version_tuple") or parse_semver(version)
+    if isinstance(version_tuple, list):
+        version_tuple = tuple(version_tuple)
+    if not (
+        isinstance(version_tuple, tuple)
+        and len(version_tuple) == 3
+        and all(isinstance(part, int) for part in version_tuple)
+    ):
+        version_tuple = parse_semver(str(raw.get("tag_name") or version))
+    if not version or version_tuple is None:
+        raise ValueError("Release metadata does not contain a semantic version")
+
+    installed_tuple = parse_semver(installed_version)
+    if installed_tuple is None:
+        action_type = "install"
+    elif version_tuple > installed_tuple:
+        action_type = "upgrade"
+    elif version_tuple < installed_tuple:
+        action_type = "downgrade"
+    else:
+        action_type = "reinstall" if component == "deck" else "active"
+
+    size = raw.get("size", raw.get("asset_size", 0))
+    try:
+        size = max(0, int(size or 0))
+    except (TypeError, ValueError):
+        size = 0
+
+    return {
+        "version": version,
+        "tag_name": str(raw.get("tag_name") or f"v{version}"),
+        "version_tuple": list(version_tuple),
+        "published_at": str(raw.get("published_at") or ""),
+        "download_url": raw.get("download_url") or "",
+        "asset_name": raw.get("asset_name") or "",
+        "size": size,
+        "is_compatible": bool(raw.get("is_compatible", raw.get("is_compatible_asset", False))),
+        "action_type": action_type,
+        "html_url": str(raw.get("html_url") or ""),
+        "body": str(raw.get("body") or ""),
+    }
+
+
+def _installed_scrcpy_runtime(version):
+    """Resolve a local runtime even when its folder uses an equivalent semver."""
+    exact = get_installed_runtime_path(version)
+    if exact:
+        return exact
+    for runtime_dir in get_installed_runtimes():
+        if _same_version(Path(runtime_dir).name, version):
+            return Path(runtime_dir)
+    return None
+
+
 class Deck(QObject):
     stateChanged = Signal()
     settingsChanged = Signal()
@@ -110,6 +187,7 @@ class Deck(QObject):
         super().__init__()
         self.app_dir = Path(app_dir)
         profile = profile or Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation)) / "config.json"
+        self._profile_dir = Path(profile).parent
         self.store = SettingsStore(profile, self.app_dir / "config.json")
         self.logs = ConsoleModel()
 
@@ -152,8 +230,12 @@ class Deck(QObject):
         self._pending_scrcpy_runtime = None
         self._activating_runtime = False
         self._catalog_lock = Lock()
+        self._catalog_generation = 0
+        self._catalog_pending = set()
+        self._catalog_inflight = False
+        self._catalog_cancel = Event()
 
-        self._version_prefs = get_version_preferences()
+        self._version_prefs = get_version_preferences(self._profile_dir)
         self._deck_releases = []
         self._scrcpy_releases = []
         self._selected_deck_release = None
@@ -181,8 +263,10 @@ class Deck(QObject):
             tcpSerial="", port="", lenses=["Default"], recovering=False,
             update="", updateStatus="", updateProgress=0, updateError="",
             updateSize=0, sessions=0,
+            deckLatest="", deckCatalogSource="",
             scrcpyVersion=self.scrcpy_version,
             scrcpyLatest="",
+            scrcpyCatalogSource="",
             scrcpyStatus="",
             scrcpyProgress=0,
             scrcpyError="",
@@ -952,12 +1036,12 @@ class Deck(QObject):
             )
             return
 
-        if target_version == self.scrcpy_version:
+        if _same_version(target_version, self.scrcpy_version):
             self.logs.log("INFO", f"Scrcpy v{target_version} is already the active runtime.")
             return
 
         # Check if version is already installed locally in versions/
-        local_dir = get_installed_runtime_path(target_version)
+        local_dir = _installed_scrcpy_runtime(target_version)
         if local_dir:
             self.logs.log("INFO", f"Activating locally installed scrcpy runtime v{target_version}...")
             self._change(scrcpyStatus="installing", scrcpyError="")
@@ -1036,98 +1120,221 @@ class Deck(QObject):
     @Slot()
     @Slot(bool)
     def checkAllUpdates(self, force=False):
-        if self._closed:
+        if self._closed or self._catalog_inflight:
             return
-        self._change(
-            updateStatus="checking" if self._state.get("updateStatus") != "downloading" else self._state["updateStatus"],
-            scrcpyStatus="checking" if self._state.get("scrcpyStatus") != "downloading" else self._state["scrcpyStatus"],
-        )
+        self._catalog_generation += 1
+        generation = self._catalog_generation
+        self._catalog_pending = {"deck", "scrcpy"}
+        self._catalog_inflight = True
+        self._catalog_cancel.clear()
+        changes = {}
+        if self._state.get("updateStatus") not in ("downloading", "installing"):
+            changes.update(updateStatus="checking", updateError="")
+        if self._state.get("scrcpyStatus") not in ("downloading", "installing"):
+            changes.update(scrcpyStatus="checking", scrcpyError="")
+        self._change(**changes)
 
-        def run_fetch():
+        # Resolve the singleton before starting workers so concurrent first use
+        # cannot construct two cache services that overwrite one another.
+        try:
+            catalog = get_catalog()
+        except Exception as exc:
+            self._set_catalog_error("deck", str(exc))
+            self._set_catalog_error("scrcpy", str(exc))
+            self._catalog_pending.clear()
+            self._catalog_inflight = False
+            return
+
+        def run_fetch(component, repo):
             try:
-                deck_entries = get_catalog("deck", force_refresh=force)
-                scrcpy_entries = get_catalog("scrcpy", force_refresh=force)
+                entries, _is_cached, source = catalog.fetch_releases(
+                    repo,
+                    force_refresh=force,
+                    cancel_event=self._catalog_cancel,
+                    return_source=True,
+                )
                 self._catalogLoaded.emit({
-                    "deck": [asdict(e) for e in deck_entries],
-                    "scrcpy": [asdict(e) for e in scrcpy_entries],
+                    "generation": generation,
+                    "component": component,
+                    "entries": entries,
+                    "source": source,
+                    "error": "",
                 })
             except Exception as exc:
-                self.logs.log("ERROR", f"Failed to check for updates: {exc}")
-                self._updateStatusChanged.emit("idle", "")
-                self._scrcpyStatusChanged.emit("idle", "")
+                self._catalogLoaded.emit({
+                    "generation": generation,
+                    "component": component,
+                    "entries": [],
+                    "source": "error",
+                    "error": str(exc),
+                })
 
-        Thread(target=run_fetch, daemon=True).start()
+        Thread(target=run_fetch, args=("deck", DECK_REPO), daemon=True).start()
+        Thread(target=run_fetch, args=("scrcpy", SCRCPY_REPO), daemon=True).start()
+
+    def _normalize_catalog_entries(self, entries, component):
+        installed = VERSION if component == "deck" else self.scrcpy_version
+        normalized = []
+        seen = set()
+        for entry in entries or []:
+            try:
+                item = normalize_release_for_ui(entry, component, installed)
+            except Exception as exc:
+                self.logs.log(
+                    "WARN",
+                    f"release_catalog component={component} result=skipped error={exc}",
+                )
+                continue
+            version_key = tuple(item["version_tuple"])
+            if version_key in seen:
+                continue
+            seen.add(version_key)
+            normalized.append(item)
+        normalized.sort(key=lambda item: tuple(item["version_tuple"]), reverse=True)
+        return normalized
+
+    def _set_catalog_error(self, component, message):
+        message = message or "Unknown release catalog error"
+        self.logs.log(
+            "ERROR",
+            f"release_catalog component={component} result=error error={message}",
+        )
+        if component == "deck":
+            changes = {"updateStatus": "error", "updateError": message, "deckCatalogSource": "error"}
+            if not self._deck_releases:
+                changes.update(update="", deckLatest="")
+            self._change(**changes)
+        else:
+            changes = {"scrcpyStatus": "error", "scrcpyError": message, "scrcpyCatalogSource": "error"}
+            if not self._scrcpy_releases:
+                changes["scrcpyLatest"] = ""
+            self._change(**changes)
+
+    def _update_catalog_notification(self, component, target):
+        pref_key = f"{component}_pinning"
+        dismissed_key = f"dismissed_{component}_notifications"
+        dismissed = self._version_prefs.get(dismissed_key, [])
+        visible = bool(
+            target
+            and self._version_prefs.get(pref_key, "follow_latest") != "pinned"
+            and target["version"] not in dismissed
+        )
+        current = VERSION if component == "deck" else self.scrcpy_version
+        title_name = "Scrcpy Deck" if component == "deck" else "scrcpy core"
+        self._notifications[component] = {
+            "visible": visible,
+            "latest_version": target["version"] if target else "",
+            "current_version": current,
+            "title": f"{title_name} v{target['version']} is available" if target else "",
+            "message": (
+                "A newer stable version of Scrcpy Deck was released."
+                if component == "deck" and target
+                else "A newer engine release is available for download."
+                if target
+                else ""
+            ),
+        }
+        self.notificationsChanged.emit()
+
+    def _apply_catalog_result(self, component, entries, source):
+        normalized = self._normalize_catalog_entries(entries, component)
+        if not normalized:
+            raise ValueError(f"No valid stable {component} releases were returned")
+
+        with self._catalog_lock:
+            if component == "deck":
+                self._deck_releases = normalized
+            else:
+                self._scrcpy_releases = normalized
+            self._refresh_version_manager_lists()
+
+        latest = normalized[0]
+        target = next((item for item in normalized if item["action_type"] == "upgrade"), None)
+        offline = source == "offline_cache"
+        if component == "deck":
+            self._update_info = dict(target) if target else None
+            changes = {
+                "deckLatest": latest["version"],
+                "deckCatalogSource": source,
+                "update": target["version"] if target else "",
+                "updateSize": target.get("size", 0) if target else 0,
+                "updateProgress": 0,
+                "updateError": "Offline; showing cached releases." if offline else "",
+            }
+            if self._state.get("updateStatus") not in ("downloading", "installing"):
+                changes["updateStatus"] = "offline" if offline else "available" if target else "up-to-date"
+            self._change(**changes)
+        else:
+            self._scrcpy_info = dict(target) if target else None
+            changes = {
+                "scrcpyLatest": latest["version"],
+                "scrcpyCatalogSource": source,
+                "scrcpyProgress": 0,
+                "scrcpyError": "Offline; showing cached releases." if offline else "",
+                "scrcpySize": target.get("size", 0) if target else 0,
+            }
+            if self._state.get("scrcpyStatus") not in ("downloading", "installing"):
+                changes["scrcpyStatus"] = "offline" if offline else "available" if target else "up-to-date"
+            self._change(**changes)
+
+        self._update_catalog_notification(component, target)
+        self.logs.log(
+            "INFO",
+            f"release_catalog component={component} result=success source={source} releases={len(normalized)}",
+        )
 
     @Slot(object)
     def _on_catalog_loaded(self, catalogs):
-        if self._closed or not isinstance(catalogs, dict):
+        if self._closed:
             return
-        with self._catalog_lock:
-            self._deck_releases = catalogs.get("deck", [])
-            self._scrcpy_releases = catalogs.get("scrcpy", [])
-            self._refresh_version_manager_lists()
+        if not isinstance(catalogs, dict):
+            self._set_catalog_error("deck", "Invalid catalog completion payload")
+            self._set_catalog_error("scrcpy", "Invalid catalog completion payload")
+            self._catalog_inflight = False
+            return
 
-        deck_target = next((r for r in self._deck_releases if r.get("action_type") == "upgrade"), None)
-        if deck_target:
-            self._on_update_found({
-                "version": deck_target["version"],
-                "download_url": deck_target.get("download_url", ""),
-                "asset_name": deck_target.get("asset_name", ""),
-                "size": deck_target.get("size", 0),
-                "body": deck_target.get("body", ""),
-                "html_url": deck_target.get("html_url", ""),
-                "tag_name": deck_target.get("tag_name", ""),
-            })
-        else:
-            if self._state.get("updateStatus") == "checking":
-                self._change(updateStatus="installed", update="", updateProgress=100)
+        # Production workers emit one independently completed repository.  Keep
+        # support for the original bulk payload for callers and cached tests.
+        if "component" in catalogs:
+            generation = catalogs.get("generation")
+            component = catalogs.get("component")
+            if generation != self._catalog_generation or component not in ("deck", "scrcpy"):
+                self.logs.log(
+                    "INFO",
+                    f"release_catalog result=ignored generation={generation} current={self._catalog_generation}",
+                )
+                return
+            try:
+                if catalogs.get("error"):
+                    self._set_catalog_error(component, catalogs["error"])
+                else:
+                    self._apply_catalog_result(component, catalogs.get("entries", []), catalogs.get("source", "network"))
+            except Exception as exc:
+                self._set_catalog_error(component, f"Could not process release metadata: {exc}")
+            finally:
+                self._catalog_pending.discard(component)
+                if not self._catalog_pending:
+                    self._catalog_inflight = False
+            return
 
-        scrcpy_target = next((r for r in self._scrcpy_releases if r.get("action_type") == "upgrade"), None)
-        if scrcpy_target:
-            self._on_scrcpy_checked({
-                "version": scrcpy_target["version"],
-                "download_url": scrcpy_target.get("download_url", ""),
-                "asset_name": scrcpy_target.get("asset_name", ""),
-                "size": scrcpy_target.get("size", 0),
-                "body": scrcpy_target.get("body", ""),
-                "html_url": scrcpy_target.get("html_url", ""),
-                "tag_name": scrcpy_target.get("tag_name", ""),
-            })
-        else:
-            if self._state.get("scrcpyStatus") == "checking":
-                self._change(scrcpyStatus="installed", scrcpyProgress=100)
-
-        deck_pin = self._version_prefs.get("deck_pinning", "follow_latest")
-        if deck_target and deck_pin != "pinned":
-            self._notifications["deck"] = {
-                "visible": True,
-                "latest_version": deck_target["version"],
-                "current_version": VERSION,
-                "title": f"Scrcpy Deck v{deck_target['version']} is available",
-                "message": f"A newer stable version of Scrcpy Deck was released.",
-            }
-        else:
-            self._notifications["deck"]["visible"] = False
-
-        scrcpy_pin = self._version_prefs.get("scrcpy_pinning", "follow_latest")
-        if scrcpy_target and scrcpy_pin != "pinned":
-            self._notifications["scrcpy"] = {
-                "visible": True,
-                "latest_version": scrcpy_target["version"],
-                "current_version": self.scrcpy_version,
-                "title": f"scrcpy core v{scrcpy_target['version']} is available",
-                "message": f"A newer engine release is available for download.",
-            }
-        else:
-            self._notifications["scrcpy"]["visible"] = False
-
-        self.notificationsChanged.emit()
+        for component in ("deck", "scrcpy"):
+            try:
+                self._apply_catalog_result(component, catalogs.get(component, []), "network")
+            except Exception as exc:
+                self._set_catalog_error(component, f"Could not process release metadata: {exc}")
+        self._catalog_inflight = False
 
     def _refresh_version_manager_lists(self):
         installed_scrcpy_dirs = get_installed_runtimes()
         installed_scrcpy_versions = [Path(p).name for p in installed_scrcpy_dirs]
-        if self.scrcpy_version not in installed_scrcpy_versions and self.scrcpy_version != "unknown":
+        if (
+            self.scrcpy_version != "unknown"
+            and not any(_same_version(self.scrcpy_version, version) for version in installed_scrcpy_versions)
+        ):
             installed_scrcpy_versions.append(self.scrcpy_version)
+
+        def is_local_scrcpy(version):
+            return any(_same_version(version, local) for local in installed_scrcpy_versions)
 
         # 1. Deck releases
         deck_labels = []
@@ -1136,8 +1343,8 @@ class Deck(QObject):
         for r in self._deck_releases:
             v = r["version"]
             deck_versions.append(v)
-            is_cur = (v == VERSION)
-            is_latest = (v == latest_deck_ver)
+            is_cur = _same_version(v, VERSION)
+            is_latest = _same_version(v, latest_deck_ver)
             if is_cur and is_latest:
                 label = f"v{v} — Installed · Latest"
             elif is_cur:
@@ -1152,18 +1359,27 @@ class Deck(QObject):
             deck_labels = [f"v{VERSION} — Installed · Latest"]
             deck_versions = [VERSION]
 
-        cur_deck_idx = self._state.get("selectedDeckIndex", 0)
-        if cur_deck_idx >= len(deck_versions):
-            cur_deck_idx = 0
+        selected_deck_version = (
+            self._selected_deck_release.get("version")
+            if isinstance(self._selected_deck_release, dict)
+            else None
+        )
+        cur_deck_idx = next(
+            (i for i, version in enumerate(deck_versions) if _same_version(version, selected_deck_version)),
+            0,
+        )
         sel_deck_ver = deck_versions[cur_deck_idx]
-        sel_deck_entry = next((r for r in self._deck_releases if r["version"] == sel_deck_ver), None)
+        sel_deck_entry = next(
+            (r for r in self._deck_releases if _same_version(r["version"], sel_deck_ver)),
+            None,
+        )
 
         if not sel_deck_entry:
             sel_deck_info = {
                 "version": sel_deck_ver,
                 "date": "Installed",
                 "size_str": "",
-                "action": "reinstall" if sel_deck_ver == VERSION else "install",
+                "action": "reinstall" if _same_version(sel_deck_ver, VERSION) else "install",
                 "html_url": f"https://github.com/{DECK_REPO}/releases",
                 "is_compatible": True,
                 "body": "",
@@ -1179,6 +1395,7 @@ class Deck(QObject):
                 "is_compatible": sel_deck_entry.get("is_compatible", True),
                 "body": sel_deck_entry.get("body", ""),
             }
+        self._selected_deck_release = sel_deck_entry
 
         act = sel_deck_info.get("action", "install")
         ver = sel_deck_info["version"]
@@ -1198,9 +1415,9 @@ class Deck(QObject):
         for r in self._scrcpy_releases:
             v = r["version"]
             scrcpy_versions.append(v)
-            is_active = (v == self.scrcpy_version)
-            is_local = (v in installed_scrcpy_versions)
-            is_latest = (v == latest_scrcpy_ver)
+            is_active = _same_version(v, self.scrcpy_version)
+            is_local = is_local_scrcpy(v)
+            is_latest = _same_version(v, latest_scrcpy_ver)
             if is_active and is_latest:
                 label = f"v{v} — Active · Latest"
             elif is_active:
@@ -1217,13 +1434,22 @@ class Deck(QObject):
             scrcpy_labels = [f"v{self.scrcpy_version} — Active · Current"]
             scrcpy_versions = [self.scrcpy_version]
 
-        cur_scrcpy_idx = self._state.get("selectedScrcpyIndex", 0)
-        if cur_scrcpy_idx >= len(scrcpy_versions):
-            cur_scrcpy_idx = 0
+        selected_scrcpy_version = (
+            self._selected_scrcpy_release.get("version")
+            if isinstance(self._selected_scrcpy_release, dict)
+            else None
+        )
+        cur_scrcpy_idx = next(
+            (i for i, version in enumerate(scrcpy_versions) if _same_version(version, selected_scrcpy_version)),
+            0,
+        )
         sel_scrcpy_ver = scrcpy_versions[cur_scrcpy_idx]
-        sel_scrcpy_entry = next((r for r in self._scrcpy_releases if r["version"] == sel_scrcpy_ver), None)
+        sel_scrcpy_entry = next(
+            (r for r in self._scrcpy_releases if _same_version(r["version"], sel_scrcpy_ver)),
+            None,
+        )
 
-        is_installed = sel_scrcpy_ver in installed_scrcpy_versions or sel_scrcpy_ver == self.scrcpy_version
+        is_installed = is_local_scrcpy(sel_scrcpy_ver) or _same_version(sel_scrcpy_ver, self.scrcpy_version)
         if not sel_scrcpy_entry:
             sel_scrcpy_info = {
                 "version": sel_scrcpy_ver,
@@ -1244,8 +1470,9 @@ class Deck(QObject):
                 "is_compatible": sel_scrcpy_entry.get("is_compatible", True),
                 "body": sel_scrcpy_entry.get("body", ""),
             }
+        self._selected_scrcpy_release = sel_scrcpy_entry
 
-        if sel_scrcpy_ver == self.scrcpy_version:
+        if _same_version(sel_scrcpy_ver, self.scrcpy_version):
             scrcpy_act_text = "Active runtime"
         elif is_installed:
             scrcpy_act_text = f"Activate v{sel_scrcpy_ver}"
@@ -1256,11 +1483,13 @@ class Deck(QObject):
         incompats = summarize_incompatibilities(sel_caps)
 
         self._change(
+            deckReleases=list(self._deck_releases),
             deckReleaseLabels=deck_labels,
             deckReleaseVersions=deck_versions,
             selectedDeckIndex=cur_deck_idx,
             selectedDeckInfo=sel_deck_info,
             deckActionText=deck_act_text,
+            scrcpyReleases=list(self._scrcpy_releases),
             scrcpyReleaseLabels=scrcpy_labels,
             scrcpyReleaseVersions=scrcpy_versions,
             selectedScrcpyIndex=cur_scrcpy_idx,
@@ -1277,9 +1506,11 @@ class Deck(QObject):
             return
         versions = self._state.get("deckReleaseVersions", [])
         if 0 <= index < len(versions):
-            self._change(selectedDeckIndex=index)
             ver = versions[index]
-            self._selected_deck_release = next((r for r in self._deck_releases if r["version"] == ver), None)
+            self._selected_deck_release = next(
+                (r for r in self._deck_releases if _same_version(r["version"], ver)),
+                None,
+            )
             self._refresh_version_manager_lists()
 
     @Slot(int)
@@ -1288,9 +1519,11 @@ class Deck(QObject):
             return
         versions = self._state.get("scrcpyReleaseVersions", [])
         if 0 <= index < len(versions):
-            self._change(selectedScrcpyIndex=index)
             ver = versions[index]
-            self._selected_scrcpy_release = next((r for r in self._scrcpy_releases if r["version"] == ver), None)
+            self._selected_scrcpy_release = next(
+                (r for r in self._scrcpy_releases if _same_version(r["version"], ver)),
+                None,
+            )
             self._refresh_version_manager_lists()
 
     @Slot(str)
@@ -1299,9 +1532,9 @@ class Deck(QObject):
             self._version_prefs["deck_pinning"] = preference
             if preference == "pinned":
                 self._version_prefs["deck_pinned_version"] = VERSION
-            set_version_preference("deck_pinning", preference)
+            set_version_preference("deck_pinning", preference, self._profile_dir)
             if preference == "pinned":
-                set_version_preference("deck_pinned_version", VERSION)
+                set_version_preference("deck_pinned_version", VERSION, self._profile_dir)
             self._change(deckPinningPreference=preference)
             self._refresh_version_manager_lists()
 
@@ -1311,9 +1544,9 @@ class Deck(QObject):
             self._version_prefs["scrcpy_pinning"] = preference
             if preference == "pinned":
                 self._version_prefs["scrcpy_pinned_version"] = self.scrcpy_version
-            set_version_preference("scrcpy_pinning", preference)
+            set_version_preference("scrcpy_pinning", preference, self._profile_dir)
             if preference == "pinned":
-                set_version_preference("scrcpy_pinned_version", self.scrcpy_version)
+                set_version_preference("scrcpy_pinned_version", self.scrcpy_version, self._profile_dir)
             self._change(scrcpyPinningPreference=preference)
             self._refresh_version_manager_lists()
 
@@ -1444,12 +1677,12 @@ class Deck(QObject):
             )
             return
 
-        if target_version == self.scrcpy_version:
+        if _same_version(target_version, self.scrcpy_version):
             self.logs.log("INFO", f"Scrcpy v{target_version} is already the active runtime.")
             return
 
         # Check if version is already installed locally in versions/
-        local_dir = get_installed_runtime_path(target_version)
+        local_dir = _installed_scrcpy_runtime(target_version)
         if local_dir:
             self.logs.log("INFO", f"Activating locally installed scrcpy runtime v{target_version}...")
             self._change(scrcpyStatus="installing", scrcpyError="")
@@ -1531,11 +1764,23 @@ class Deck(QObject):
     @Slot()
     def dismissDeckNotification(self):
         self._notifications["deck"]["visible"] = False
+        version = self._notifications["deck"].get("latest_version")
+        dismissed = list(self._version_prefs.get("dismissed_deck_notifications", []))
+        if version and version not in dismissed:
+            dismissed.append(version)
+            self._version_prefs["dismissed_deck_notifications"] = dismissed
+            set_version_preference("dismissed_deck_notifications", dismissed, self._profile_dir)
         self.notificationsChanged.emit()
 
     @Slot()
     def dismissScrcpyNotification(self):
         self._notifications["scrcpy"]["visible"] = False
+        version = self._notifications["scrcpy"].get("latest_version")
+        dismissed = list(self._version_prefs.get("dismissed_scrcpy_notifications", []))
+        if version and version not in dismissed:
+            dismissed.append(version)
+            self._version_prefs["dismissed_scrcpy_notifications"] = dismissed
+            set_version_preference("dismissed_scrcpy_notifications", dismissed, self._profile_dir)
         self.notificationsChanged.emit()
 
     @Slot(str, str)
@@ -1549,6 +1794,10 @@ class Deck(QObject):
     @Slot()
     def shutdown(self):
         self._closed = True
+        self._catalog_generation += 1
+        self._catalog_inflight = False
+        self._catalog_pending.clear()
+        self._catalog_cancel.set()
         self.stop.set()
         self._update_cancel.set()
         self._scrcpy_cancel.set()

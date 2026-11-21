@@ -43,7 +43,14 @@ def select_deck_asset(assets: list[dict]) -> dict | None:
         url = asset.get("browser_download_url", "")
         if not name or not url:
             continue
-        if name.lower().endswith(".exe"):
+        lowered = name.lower()
+        if (
+            lowered.endswith(".exe")
+            and "arm" not in lowered
+            and "x86" not in lowered
+            and "32-bit" not in lowered
+            and "win32" not in lowered
+        ):
             candidates.append(asset)
 
     if not candidates:
@@ -194,15 +201,24 @@ class ReleaseCatalog:
         force_refresh: bool = False,
         timeout: int = 10,
         include_prereleases: bool = False,
-    ) -> tuple[list[ReleaseEntry], bool]:
+        cancel_event: threading.Event | None = None,
+        return_source: bool = False,
+    ) -> tuple[list[ReleaseEntry], bool] | tuple[list[ReleaseEntry], bool, str]:
         """Fetch all releases with pagination from GitHub API.
 
-        Returns (releases_list, is_from_cache_or_offline).
+        Returns ``(releases, is_cached)`` for backward compatibility.  When
+        ``return_source`` is true, a third value identifies ``network``,
+        ``cache``, ``not_modified``, or ``offline_cache``.
         """
+        def result(entries, is_cached, source):
+            if return_source:
+                return entries, is_cached, source
+            return entries, is_cached
+
         if not force_refresh and self.is_cache_fresh(repo):
             all_cached = self.get_cached_releases(repo)
             filtered = [r for r in all_cached if include_prereleases or not r.prerelease]
-            return filtered, True
+            return result(filtered, True, "cache")
 
         raw_releases = []
         etag = None
@@ -220,6 +236,8 @@ class ReleaseCatalog:
 
         try:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise InterruptedError("Release catalog request cancelled")
                 try:
                     try:
                         res = _fetch_release_page(repo, page, etag=etag, timeout=timeout)
@@ -234,8 +252,10 @@ class ReleaseCatalog:
                     if not isinstance(data, list) or not data:
                         break
                     raw_releases.extend(data)
+                    if len(data) < 30:
+                        break
                     page += 1
-                    if page > 5:  # Safety cap at 150 releases
+                    if page > 100:  # Defensive cap; GitHub currently exposes far fewer.
                         break
                 except urllib.error.HTTPError as http_err:
                     if http_err.code == 304 and page == 1:
@@ -246,23 +266,32 @@ class ReleaseCatalog:
                                 self._save_cache()
                         all_cached = self.get_cached_releases(repo)
                         filtered = [r for r in all_cached if include_prereleases or not r.prerelease]
-                        return filtered, True
+                        return result(filtered, True, "not_modified")
                     raise http_err
 
-        except Exception as exc:
+        except InterruptedError:
+            raise
+        except Exception:
             # On network/rate limit error, return cached releases if available
             all_cached = self.get_cached_releases(repo)
             if all_cached:
                 filtered = [r for r in all_cached if include_prereleases or not r.prerelease]
-                return filtered, True
-            raise exc
+                return result(filtered, True, "offline_cache")
+            raise
 
         # Process retrieved releases
         parsed_entries = []
         is_deck = (repo.lower() == DECK_REPO.lower())
 
+        seen_versions = set()
         for rel in raw_releases:
+            if cancel_event is not None and cancel_event.is_set():
+                raise InterruptedError("Release catalog request cancelled")
+            if not isinstance(rel, dict):
+                continue
             if rel.get("draft", False):
+                continue
+            if rel.get("prerelease", False) and not include_prereleases:
                 continue
             tag = rel.get("tag_name", "")
             name = rel.get("name", "") or tag
@@ -273,8 +302,13 @@ class ReleaseCatalog:
             # Clean version string (e.g. "5.0.1" or "4.0.3")
             m = re.search(r"(\d+\.\d+(?:\.\d+)?)", tag) or re.search(r"(\d+\.\d+(?:\.\d+)?)", name)
             version_str = m.group(1) if m else format_semver(ver_tuple)
+            if ver_tuple in seen_versions:
+                continue
+            seen_versions.add(ver_tuple)
 
             assets = rel.get("assets", [])
+            if not isinstance(assets, list):
+                assets = []
             chosen_asset = select_deck_asset(assets) if is_deck else select_scrcpy_asset(assets)
 
             entry = ReleaseEntry(
@@ -307,7 +341,7 @@ class ReleaseCatalog:
             self._save_cache()
 
         filtered = [r for r in parsed_entries if include_prereleases or not r.prerelease]
-        return filtered, False
+        return result(filtered, False, "network")
 
 
 _default_catalog = None
