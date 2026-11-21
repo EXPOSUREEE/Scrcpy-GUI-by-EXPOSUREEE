@@ -9,7 +9,20 @@ open_a_terminal_here.bat
 # Build Output
 build/
 dist/
+Output/
 *.spec
+*.iss
+
+# Local project files
+/AGENTS.md
+/build_exe.py
+/Scrcpy_GUI_Installer.iss
+/packaging/hooks/
+/tests/
+/test.txt
+/requirements-dev.txt
+/Scrcpy_GUI_by_EXPOSUREEE_V4.0.0.py
+/convert.py
 
 # Python Caches
 __pycache__/
@@ -29,7 +42,7 @@ adbkey.pub
 .vscode/
 .idea/
 
-# Local development and installer staging
+# Local development and generated files
 .venv/
 venv/
 .pytest_cache/

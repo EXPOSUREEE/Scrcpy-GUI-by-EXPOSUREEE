@@ -6,7 +6,7 @@ Scrcpy Deck is a Windows desktop controller for Android screen mirroring, camera
 
 ## Run on Windows
 
-For a source checkout, use 64-bit Python 3.11 or later. The application has been run with Python 3.12 on Windows.
+Use 64-bit Python 3.11 or later to install the dependencies and launch Scrcpy Deck from source.
 
 ```powershell
 python -m venv .venv
@@ -14,7 +14,7 @@ python -m venv .venv
 .\.venv\Scripts\python main.py
 ```
 
-Extract the complete Windows x64 scrcpy distribution into `runtime` beside `main.py` to run device sessions from source. Deck also looks beside the application and on `PATH`. Keep `scrcpy-server` and the upstream DLLs with their executable. Scrcpy Deck uses scrcpy 5.0.1. [Official scrcpy download](https://github.com/Genymobile/scrcpy/releases/tag/v5.0.1)
+Extract the complete Windows x64 scrcpy distribution into `runtime/` beside `main.py`. Deck also looks beside the application and on `PATH`. Keep `scrcpy-server` and the upstream DLLs with their executable. [Official scrcpy 5.0.1 download](https://github.com/Genymobile/scrcpy/releases/tag/v5.0.1)
 
 ## Connect a phone
 
@@ -43,6 +43,12 @@ The default profile is `%LOCALAPPDATA%\Scrcpy Deck\config.json`. On first run, D
 
 Changes are saved after a short debounce and flushed on normal exit. Writes replace the profile atomically. A per-profile lock prevents two desktop instances from overwriting each other. Pairing codes are transient and are sent to ADB through stdin.
 
+The legacy CustomTkinter frontend is available at commit `8e7de5a`. To open it in a separate checkout, run the following command.
+
+```powershell
+git worktree add --detach ..\ScrcpyDeck-CustomTkinter 8e7de5a
+```
+
 ## Application structure
 
 | Location | Responsibility |
@@ -67,6 +73,7 @@ The migration was exercised on Windows 11 with a Redmi 12 5G running Android 13.
 | Wired sessions | USB mirroring, read-only viewing, UHID mirroring, MP4 finalization, microphone mode and the external debug console completed. OTG selected the phone and its control window closed cleanly. Physical keystrokes and mouse input were outside that check. |
 | Camera | Six lenses enumerated. Front, rear and explicitly selected lens sessions ran. The selected-lens test used a size limit, frame rate, rotation, aspect ratio and zoom. |
 | Wireless | USB-assisted connection, live pairing-code exchange, mDNS port discovery, transition to port 5555, saved-device launch and USB recovery after a failed reconnect succeeded. The phone returned to authorized USB operation afterward. |
+
 Three source launches per frontend on the same machine gave a median of **1.97 s** for CustomTkinter and **0.57 s** for Qt from process start to a visible window responding to a Windows message. Median process working set three seconds later was **63 MiB** and **172 MiB**, respectively. Qt reported a threaded Direct3D 11 render loop. These are machine-specific observations.
 
 ## License
