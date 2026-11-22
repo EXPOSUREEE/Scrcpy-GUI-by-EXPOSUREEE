@@ -1,58 +1,78 @@
+"""Per-user settings with backwards-compatible import of the v4 JSON file."""
 import json
 import os
-import customtkinter as ctk
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-CONFIG_FIELDS = {
-    "ip": ("var_ip", "StringVar", ""),
-    "source": ("var_source", "StringVar", "screen"),
-    "bitrate": ("var_bitrate", "StringVar", "8"),
-    "max_fps": ("var_max_fps", "StringVar", "0"),
-    "max_size": ("var_max_size", "StringVar", "0"),
-    "video_codec": ("var_video_codec", "StringVar", "h264"),
-    "audio_codec": ("var_audio_codec", "StringVar", "opus"),
-    "cam_ar": ("cam_ar_combo_val", "StringVar", "Full Sensor (Default)"),
-    "renderer": ("renderer_combo_val", "StringVar", "software"),
-    "orientation": ("orientation_combo_val", "StringVar", "Auto (Rotate with Phone)"),
-    "always_on_top": ("var_always_on_top", "BooleanVar", False),
-    "stay_awake": ("var_stay_awake", "BooleanVar", True),
-    "screen_off": ("var_screen_off", "BooleanVar", False),
-    "show_touches": ("var_show_touches", "BooleanVar", False),
-    "no_audio": ("var_no_audio", "BooleanVar", False),
-    "fullscreen": ("var_fullscreen", "BooleanVar", False),
-    "borderless": ("var_borderless", "BooleanVar", False),
-    "no_control": ("var_no_control", "BooleanVar", False),
-    "record": ("var_record", "BooleanVar", False),
-    "debug_mode": ("var_debug_mode", "BooleanVar", False)
+DEFAULTS = {
+    "ip": "", "source": "screen", "bitrate": "8", "max_fps": "0", "max_size": "0",
+    "video_codec": "h264", "audio_codec": "opus", "cam_ar": "Full Sensor (Default)",
+    "cam_orientation": "0° (Default)", "renderer": "software",
+    "orientation": "Auto (Rotate with Phone)", "always_on_top": False,
+    "stay_awake": True, "screen_off": False, "show_touches": False, "no_audio": False,
+    "fullscreen": False, "borderless": False, "no_control": False, "record": False,
+    "debug_mode": False, "screen_mode": "HID", "camera_id": "Default",
+    "camera_torch": False, "camera_zoom": "1.0", "camera_max_size": "0", "camera_fps": "30",
+    "appearance": "light",
 }
 
-def init_config_vars(target_obj):
-    """Initializes Tkinter variables on the target object."""
-    for key, (var_name, var_type, default_val) in CONFIG_FIELDS.items():
-        if var_type == "StringVar":
-            setattr(target_obj, var_name, ctk.StringVar(value=default_val))
-        elif var_type == "BooleanVar":
-            setattr(target_obj, var_name, ctk.BooleanVar(value=default_val))
 
-def load_config(target_obj, config_file):
-    """Loads configuration from file into the target object's variables."""
-    if not os.path.exists(config_file):
-        return
-    try:
-        with open(config_file, 'r') as f:
-            config = json.load(f)
-        for key, (var_name, _, _) in CONFIG_FIELDS.items():
-            if key in config:
-                getattr(target_obj, var_name).set(config[key])
-    except Exception as e:
-        print(f"Error loading config: {e}")
+def normalize(key, value):
+    """Accept Tk string/boolean representations written by earlier releases."""
+    if isinstance(DEFAULTS[key], bool):
+        return value is True or str(value).lower() in {"1", "true", "yes", "on"}
+    if value is None or not isinstance(value, (str, int, float)):
+        return DEFAULTS[key]
+    if key == "screen_mode":
+        return next((mode for mode in ("OTG", "UHID") if str(value).upper().startswith(mode)), "HID")
+    if key == "appearance":
+        return value if value in ("light", "dark") else DEFAULTS[key]
+    return str(value)
 
-def save_config(target_obj, config_file):
-    """Saves the target object's variables to the configuration file."""
-    config = {}
-    for key, (var_name, _, _) in CONFIG_FIELDS.items():
-        config[key] = getattr(target_obj, var_name).get()
-    try:
-        with open(config_file, 'w') as f:
-            json.dump(config, f)
-    except Exception as e:
-        print(f"Error saving config: {e}")
+
+class SettingsStore:
+    def __init__(self, path: Path, legacy: Path):
+        self.path = path
+        self.values = DEFAULTS.copy()
+        self.saved = []
+        self.extra = {}
+        self.error = ""
+        self.dirty = False
+        source = path if path.exists() else legacy
+        if not source.is_file():
+            return
+        try:
+            data = json.loads(source.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Expected a JSON object")
+            records = data.get("saved_devices", [])
+            if not isinstance(records, list) or not all(isinstance(d, dict) for d in records):
+                raise ValueError("Invalid saved device list")
+            self.saved = records
+            self.values.update({k: normalize(k, data[k]) for k in DEFAULTS if k in data})
+            self.extra = {k: v for k, v in data.items() if k not in DEFAULTS and k != "saved_devices"}
+            self.dirty = source != path
+        except (ValueError, OSError) as exc:
+            self.error = f"Could not read {source}: {exc}"
+
+    def save(self):
+        """Replace the profile only after the complete new file has been flushed."""
+        if not self.dirty:
+            return
+        if self.error:
+            raise OSError(self.error)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        data = {**self.extra, **self.values, "saved_devices": self.saved}
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
+                                    prefix=".config-", delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(data, stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(self.path)
+            self.dirty = False
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)

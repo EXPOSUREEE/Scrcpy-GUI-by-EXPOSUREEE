@@ -1,138 +1,133 @@
-import subprocess
-import threading
+"""Blocking ADB operations. The frontend calls these on a worker thread."""
 import re
-import os
+import subprocess
+from pathlib import Path
+
+from device_names import DeviceInfo, build_display_name, load_device_name_map
+
+HIDDEN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+class DeviceError(RuntimeError):
+    """An actionable command or device error for the operator."""
+
 
 class AdbManager:
-    def __init__(self, adb_exe, script_dir, console_mgr):
-        self.adb_exe = adb_exe
-        self.script_dir = script_dir
-        self.console = console_mgr
+    def __init__(self, adb_exe, resources, log):
+        self.exe = str(adb_exe)
+        self.mapping = load_device_name_map(resources)
+        self.log = log
+        self._cache = {}
 
-    def run_cmd_sync(self, args, context="ADB"):
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        command = [self.adb_exe] + args
+    def run(self, args, quiet=False, input_text=None):
+        if not quiet:
+            self.log("INFO", subprocess.list2cmdline(["adb", *args]))
         try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                startupinfo=startupinfo,
-                cwd=self.script_dir
-            )
-            self._log_command_result(command, result, context)
-            return result
-        except Exception as e:
-            error_message = f"{context} failed before launch: {e}"
-            self.console.log("INFO", f"{context} | Executing: {' '.join(command)}")
-            self.console.log("ERROR", error_message)
-            self.console.log_hint_for_message(error_message)
-            return None
+            result = subprocess.run([self.exe, *args], capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=15,
+                                    creationflags=HIDDEN, input=input_text)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise DeviceError(f"adb {args[0]} failed: {exc}") from exc
+        output = "\n".join(s.strip() for s in (result.stdout, result.stderr) if s.strip())
+        if result.returncode:
+            raise DeviceError(output or f"adb exited with code {result.returncode}")
+        if not quiet and output:
+            self.log("OUT", output)
+        return output
 
-    def _log_command_result(self, command, result, context):
-        self.console.log("INFO", f"{context} | Executing: {' '.join(command)}")
-        if result.stdout.strip():
-            for line in result.stdout.strip().splitlines():
-                self.console.log("OUT", line)
-        if result.stderr.strip():
-            for line in result.stderr.strip().splitlines():
-                self.console.log("ERR", line)
-        if result.returncode != 0:
-            error_summary = f"{context} exited with code {result.returncode}."
-            self.console.log("ERROR", error_summary)
-            combined = " ".join(part for part in [result.stdout.strip(), result.stderr.strip(), error_summary] if part)
-            self.console.log_hint_for_message(combined)
-
-    def refresh_devices(self, on_success, on_error):
-        def task():
-            result = self.run_cmd_sync(["devices"], context="ADB device scan")
-            output = result.stdout.strip() if result else ""
-            if result and result.returncode == 0 and output:
-                lines = output.split('\n')[1:]
-                devices = [line.split()[0] for line in lines if "device" in line]
-                if devices:
-                    on_success(devices)
-                else:
-                    on_error("no_devices")
+    def scan(self):
+        devices = []
+        present = {}
+        for line in self.run(["devices", "-l"]).splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[1] not in {"device", "offline", "unauthorized", "recovery", "sideload"}:
+                continue
+            serial, state = parts[:2]
+            tags = dict(part.split(":", 1) for part in parts[2:] if ":" in part)
+            transport = ("emulator" if serial.startswith("emulator-") else
+                         "wireless" if ":" in serial or "_adb-tls-" in serial else "usb")
+            key = (serial, tags.get("transport_id"))
+            if state == "device" and key in self._cache:
+                info = self._cache[key]
+                present[key] = info
             else:
-                on_error("adb_error")
-        threading.Thread(target=task, daemon=True).start()
+                info = DeviceInfo(serial, state, transport, model=tags.get("model", ""),
+                                  product=tags.get("product", ""), device=tags.get("device", ""))
+                if state == "device":
+                    try:
+                        output = self.run(["-s", serial, "shell", "getprop"], quiet=True)
+                        props = dict(re.findall(r"^\[([^]]+)\]: \[(.*?)\]\s*$", output, re.M))
+                        info.hardware_serial = props.get("ro.serialno") or (serial if transport == "usb" else "")
+                        info.brand = props.get("ro.product.brand", "")
+                        info.manufacturer = props.get("ro.product.manufacturer", "")
+                        info.model = props.get("ro.product.model") or info.model or props.get("ro.vendor.product.model") or props.get("ro.product.vendor.model", "")
+                        info.product = props.get("ro.product.name") or info.product
+                        info.device = props.get("ro.product.device") or info.device
+                        info.market_name = next((props[p] for p in (
+                            "ro.product.marketname", "ro.config.marketing_name",
+                            "ro.vendor.oplus.market.name", "ro.miui.device.name"
+                        ) if props.get(p)), "")
+                        present[key] = info
+                    except DeviceError as exc:
+                        self.log("WARN", str(exc))
+                build_display_name(info, self.mapping)
+            devices.append(info)
+        self._cache = present
+        return devices
 
-    def get_device_ip(self, serial, on_success, on_error):
-        def task():
-            result = self.run_cmd_sync(["-s", serial, "shell", "ip", "-f", "inet", "addr", "show", "wlan0"], context=f"Fetch Wi-Fi IP for {serial}")
-            output = result.stdout.strip() if result else ""
-            if result and result.returncode == 0 and output:
-                match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", output)
-                if match:
-                    on_success(match.group(1))
-                    return
-            on_error()
-        threading.Thread(target=task, daemon=True).start()
+    def wifi_ip(self, serial):
+        output = self.run(["-s", serial, "shell", "ip", "-f", "inet", "addr", "show", "wlan0"])
+        match = re.search(r"\binet (\d+\.\d+\.\d+\.\d+)", output)
+        if not match:
+            raise DeviceError("Could not find IP on wlan0. Connect the phone to Wi-Fi.")
+        return match[1]
 
-    def enable_tcpip(self, serial, on_success, on_error):
-        def task():
-            result = self.run_cmd_sync(["-s", serial, "tcpip", "5555"], context=f"Enable TCP/IP for {serial}")
-            if result and result.returncode == 0:
-                on_success()
-            else:
-                on_error()
-        threading.Thread(target=task, daemon=True).start()
+    def tcpip(self, serial):
+        self.run(["-s", serial, "tcpip", "5555"])
 
-    def connect_wireless(self, ip, on_success, on_error):
-        def task():
-            result = self.run_cmd_sync(["connect", f"{ip}:5555"], context=f"Wireless connect to {ip}:5555")
-            output = result.stdout.strip() if result else ""
-            combined = " ".join(part for part in [output, result.stderr.strip() if result else ""] if part)
-            if result and result.returncode == 0 and "connected" in combined.lower():
-                on_success()
-            else:
-                on_error(combined)
-        threading.Thread(target=task, daemon=True).start()
+    def connect(self, target):
+        output = self.run(["connect", target])
+        if not re.search(r"^(already )?connected to ", output, re.I | re.M):
+            raise DeviceError(output or f"Failed to connect to {target}")
 
-    def kill_server(self, on_success, on_error):
-        def task():
-            result = self.run_cmd_sync(["kill-server"], context="ADB kill-server")
-            if result and result.returncode == 0:
-                on_success()
-            else:
-                on_error()
-        threading.Thread(target=task, daemon=True).start()
+    def pair(self, target, code):
+        output = self.run(["pair", target], input_text=code + "\n")
+        if "successfully paired" not in output.lower():
+            raise DeviceError(output or "Pairing failed. Request a fresh code on the phone.")
 
-    def reset_connection(self, ip, on_success, on_error):
-        def task():
-            if ip:
-                self.run_cmd_sync(["disconnect", f"{ip}:5555"], context=f"Disconnect saved target {ip}:5555")
-            self.run_cmd_sync(["disconnect"], context="ADB disconnect all")
-            self.run_cmd_sync(["kill-server"], context="ADB kill-server before pairing reset")
+    def _services(self, cancelled):
+        for attempt in range(5):
+            if cancelled.is_set():
+                break
+            yield self.run(["mdns", "services"]).splitlines()
+            if attempt < 4:
+                cancelled.wait(1.5)
 
-            adb_key_dir = os.path.join(os.path.expanduser("~"), ".android")
-            adb_key_paths = [
-                os.path.join(adb_key_dir, "adbkey"),
-                os.path.join(adb_key_dir, "adbkey.pub"),
-            ]
-            removed_keys = []
-            key_errors = []
-            for key_path in adb_key_paths:
-                if not os.path.exists(key_path):
-                    continue
-                try:
-                    os.remove(key_path)
-                    removed_keys.append(os.path.basename(key_path))
-                except Exception as exc:
-                    key_errors.append(f"{os.path.basename(key_path)}: {exc}")
+    def discover(self, ip, cancelled):
+        for lines in self._services(cancelled):
+            for line in lines:
+                if "_adb-tls-connect._tcp" in line:
+                    match = re.search(r"\b" + re.escape(ip) + r":(\d+)\b", line)
+                    if match:
+                        return match[1]
+        raise DeviceError("No matching mDNS service. Enter the connect port from Wireless debugging.")
 
-            if removed_keys:
-                self.console.log("INFO", f"Removed local ADB key files: {', '.join(removed_keys)}")
-            else:
-                self.console.log("INFO", "No local ADB key files were found to remove.")
+    def resolve_device_by_serial(self, hardware, cancelled):
+        """Find an advertised connection service for a previously saved phone."""
+        token = re.compile(r"^adb-" + re.escape(hardware) + r"(?:[-.\s]|$)", re.I)
+        for lines in self._services(cancelled):
+            for line in lines:
+                if token.search(line.strip()) and any(s in line for s in ("_adb-tls-connect._tcp", "_adb._tcp")):
+                    match = re.search(r"\b(\d+\.\d+\.\d+\.\d+:\d+)\b", line)
+                    if match:
+                        return match[1]
+        raise DeviceError("The saved phone is not advertising a Wi-Fi connection. Enable Wireless debugging or recover over USB.")
 
-            if key_errors:
-                for error in key_errors:
-                    self.console.log("ERROR", f"Could not remove {error}")
-                self.console.log_hint_for_message("access is denied while removing adb keys")
-
-            self.run_cmd_sync(["start-server"], context="ADB start-server after pairing reset")
-            on_success()
-        threading.Thread(target=task, daemon=True).start()
+    def reset(self):
+        self.run(["disconnect"])
+        self.run(["kill-server"])
+        try:
+            for name in ("adbkey", "adbkey.pub"):
+                (Path.home() / ".android" / name).unlink(missing_ok=True)
+        finally:
+            self.run(["start-server"])
